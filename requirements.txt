@@ -1,0 +1,12 @@
+# 仅做 pyannote.audio 说话人分割（时间段 + 说话人标签）
+pyannote.audio>=3.1.0
+torch
+torchaudio
+faster-whisper
+# FastAPI 接口
+fastapi
+uvicorn[standard]
+python-multipart
+requests
+websockets
+pydub

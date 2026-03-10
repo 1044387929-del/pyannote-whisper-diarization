@@ -1,0 +1,26 @@
+version: 3.1.0
+
+pipeline:
+  # 使用本地模型
+  name: pyannote.audio.pipelines.SpeakerDiarization
+  params:
+    clustering: AgglomerativeClustering
+    # embedding: pyannote/wespeaker-voxceleb-resnet34-LM
+    embedding: /root/autodl-tmp/modelscope/hub/models/pyannote/wespeaker-voxceleb-resnet34-LM/pytorch_model.bin
+    embedding_batch_size: 32
+    embedding_exclude_overlap: true
+    # segmentation: pyannote/segmentation-3.0
+    segmentation: /root/autodl-tmp/modelscope/hub/models/pyannote/segmentation-3.0/pytorch_model.bin
+    segmentation_batch_size: 32
+    # 本地 PLDA，避免访问 HuggingFace（plda 目录内需有 xvec_transform.npz 和 plda.npz）
+    plda:
+      checkpoint: /root/autodl-tmp/django_hmxy/pyannote_diarization/plda
+
+params:
+  clustering:
+    method: centroid
+    min_cluster_size: 12
+    # 这个阈值是根据实际数据集调整的，如果需要调整，可以调整这个阈值
+    threshold: 0.7245654963945799
+  segmentation:
+    min_duration_off: 0.0

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live 实时转写</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; margin: 0; padding: 24px; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .container { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin-bottom: 8px; }
+    .sub { color: #94a3b8; font-size: 0.9rem; margin-bottom: 24px; }
+    .config { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; align-items: center; }
+    .config label { display: flex; align-items: center; gap: 8px; }
+    .config input { padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; }
+    .btn { padding: 12px 24px; border-radius: 10px; border: none; font-size: 1rem; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-primary:disabled { background: #475569; cursor: not-allowed; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+    .status { margin-bottom: 16px; padding: 12px 16px; border-radius: 8px; background: #1e293b; color: #94a3b8; }
+    .status.recording { background: #1e3a2f; color: #4ade80; }
+    .transcripts { background: #1e293b; border-radius: 12px; padding: 16px; min-height: 300px; max-height: 50vh; overflow-y: auto; }
+    .transcripts.empty { color: #64748b; font-style: italic; }
+    .utterance { margin-bottom: 12px; padding: 12px; background: #0f172a; border-radius: 8px; border-left: 4px solid #3b82f6; }
+    .utterance .meta { font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px; }
+    .utterance .speaker { font-weight: 600; color: #60a5fa; }
+    .utterance .time { margin-left: 8px; }
+    .utterance .text { font-size: 1rem; line-height: 1.5; }
+    .wave-wrap { margin-bottom: 16px; padding: 16px; background: #1e293b; border-radius: 12px; display: none; }
+    .wave-wrap.active { display: block; }
+    .wave-wrap .wave-label { font-size: 0.85rem; color: #94a3b8; margin-bottom: 8px; }
+    .wave-wrap canvas { display: block; width: 100%; height: 56px; border-radius: 8px; background: #0f172a; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Live 实时转写</h1>
+    <p class="sub">麦克风录音 → WebSocket 实时识别 → 展示结果</p>
+
+    <div class="config">
+      <label>
+        服务地址：
+        <input type="text" id="wsUrl" style="width: 320px;" placeholder="ws://host:8001/ws/live_transcribe">
+      </label>
+      <label>
+        每块秒数：
+        <input type="number" id="chunkSecs" value="10" min="5" max="30" style="width: 72px;">
+      </label>
+      <label>
+        语言：
+        <input type="text" id="lang" value="zh" placeholder="zh / en / 空" style="width: 80px;">
+      </label>
+      <button id="startBtn" class="btn btn-primary">开始录音</button>
+      <button id="stopBtn" class="btn btn-danger" disabled>停止录音</button>
+    </div>
+
+    <div id="status" class="status">未连接</div>
+    <div id="waveWrap" class="wave-wrap" title="麦克风音量">
+      <div class="wave-label">正在收音</div>
+      <canvas id="waveCanvas" width="600" height="56"></canvas>
+    </div>
+    <div id="transcripts" class="transcripts empty">转写结果将显示在此处…</div>
+  </div>
+
+  <script>
+    const wsUrlEl = document.getElementById('wsUrl');
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = location.hostname || '127.0.0.1';
+    wsUrlEl.value = `${proto}//${host}:8001/ws/live_transcribe`;
+    const chunkSecsEl = document.getElementById('chunkSecs');
+    const langEl = document.getElementById('lang');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusEl = document.getElementById('status');
+    const transcriptsEl = document.getElementById('transcripts');
+    const waveWrapEl = document.getElementById('waveWrap');
+    const waveCanvasEl = document.getElementById('waveCanvas');
+
+    let ws = null;
+    let stream = null;
+    let liveCtx = null;
+    let liveProcessor = null;
+    let liveSource = null;
+    let liveAnalyser = null;
+    let waveRafId = null;
+    let chunkIndex = 0;
+    let totalOffset = 0;
+    const chunkBuffers = [];
+
+    function secsToHms(secs) {
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = Math.floor(secs % 60);
+      const ms = Math.floor((secs % 1) * 1000);
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+    }
+
+    function addUtterance(u, idx, chunkSecs) {
+      transcriptsEl.classList.remove('empty');
+      const div = document.createElement('div');
+      div.className = 'utterance';
+      const t0 = u.start ?? 0;
+      const t1 = u.end ?? (u.start != null ? u.start : chunkSecs);
+      const absT0 = totalOffset + t0;
+      const absT1 = totalOffset + (t1 > t0 ? t1 : chunkSecs);
+      const ts = `${secsToHms(absT0)} - ${secsToHms(absT1)}`;
+      div.innerHTML = `<div class="meta"><span class="speaker">${u.speaker ?? '?'}</span><span class="time">${ts}</span></div><div class="text">${escapeHtml(u.text ?? '')}</div>`;
+      transcriptsEl.appendChild(div);
+      transcriptsEl.scrollTop = transcriptsEl.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function setStatus(text, recording = false) {
+      statusEl.textContent = text;
+      statusEl.classList.toggle('recording', recording);
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => {
+          const b64 = r.result.split(',')[1];
+          resolve(b64 || '');
+        };
+        r.onerror = reject;
+        r.readAsDataURL(blob);
+      });
+    }
+
+    function floatTo16BitPCM(float32Array) {
+      const buffer = new ArrayBuffer(float32Array.length * 2);
+      const view = new DataView(buffer);
+      let offset = 0;
+      for (let i = 0; i < float32Array.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        offset += 2;
+      }
+      return buffer;
+    }
+
+    function drawWave(analyser) {
+      if (!analyser || !waveWrapEl.classList.contains('active')) return;
+      const canvas = waveCanvasEl;
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      const barCount = 32;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, w, h);
+      const barW = Math.max(2, (w / barCount) - 2);
+      const gap = 2;
+      for (let i = 0; i < barCount; i++) {
+        const idx = Math.floor((i / barCount) * data.length * 0.4);
+        const v = (data[idx] || 0) / 255;
+        const barH = Math.max(4, v * h * 0.9);
+        const x = (w / barCount) * i + gap / 2;
+        const y = (h - barH) / 2;
+        const g = ctx.createLinearGradient(0, h, 0, 0);
+        g.addColorStop(0, '#3b82f6');
+        g.addColorStop(0.6, '#60a5fa');
+        g.addColorStop(1, '#93c5fd');
+        ctx.fillStyle = g;
+        ctx.fillRect(x, y, barW, barH);
+      }
+      waveRafId = requestAnimationFrame(() => drawWave(analyser));
+    }
+
+    function encodeWav(samples, sampleRate) {
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+      const blockAlign = numChannels * bitsPerSample / 8;
+      const dataSize = samples.length * 2;
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+      const writeStr = (pos, str) => {
+        for (let i = 0; i < str.length; i++) view.setUint8(pos + i, str.charCodeAt(i));
+      };
+      writeStr(0, 'RIFF');
+      view.setUint32(4, 36 + dataSize, true);
+      writeStr(8, 'WAVE');
+      writeStr(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+      writeStr(36, 'data');
+      view.setUint32(40, dataSize, true);
+      const pcm = floatTo16BitPCM(samples);
+      new Uint8Array(buffer).set(new Uint8Array(pcm), 44);
+      return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    async function startRecording() {
+      const wsUrl = wsUrlEl.value.trim();
+      const chunkSecs = Number(chunkSecsEl.value) || 10;
+      const lang = (langEl.value || 'zh').trim() || null;
+
+      setStatus('正在获取麦克风权限…');
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        setStatus('麦克风权限被拒绝: ' + e.message);
+        return;
+      }
+
+      chunkIndex = 0;
+      totalOffset = 0;
+      liveCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      liveSource = liveCtx.createMediaStreamSource(stream);
+      liveAnalyser = liveCtx.createAnalyser();
+      liveAnalyser.fftSize = 256;
+      liveAnalyser.smoothingTimeConstant = 0.7;
+      const sampleRate = liveCtx.sampleRate;
+      let samples = [];
+      const bufferSize = 4096;
+      liveProcessor = liveCtx.createScriptProcessor(bufferSize, 1, 1);
+      liveProcessor.onaudioprocess = (e) => {
+        const input = e.inputBuffer.getChannelData(0);
+        for (let i = 0; i < input.length; i++) samples.push(input[i]);
+      };
+      liveSource.connect(liveAnalyser);
+      liveAnalyser.connect(liveProcessor);
+      liveProcessor.connect(liveCtx.destination);
+
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (e) {
+        setStatus('WebSocket 连接失败: ' + e.message);
+        stream.getTracks().forEach(t => t.stop());
+        if (liveProcessor) { liveProcessor.disconnect(); liveProcessor = null; }
+        if (liveAnalyser) { liveAnalyser.disconnect(); liveAnalyser = null; }
+        if (liveSource) { liveSource.disconnect(); liveSource = null; }
+        if (liveCtx) { liveCtx.close(); liveCtx = null; }
+        return;
+      }
+
+      ws.onopen = () => {
+        const init = { type: 'init', language: lang || 'zh' };
+        ws.send(JSON.stringify(init));
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'ready') {
+            setStatus(`已连接，开始录音 (每 ${chunkSecs}s 发送一块)`, true);
+            waveWrapEl.classList.add('active');
+            if (liveAnalyser) drawWave(liveAnalyser);
+            const interval = setInterval(() => {
+              if (!ws || ws.readyState !== WebSocket.OPEN) {
+                clearInterval(interval);
+                return;
+              }
+              const need = sampleRate * chunkSecs;
+              if (samples.length >= need) {
+                const chunk = samples.splice(0, need);
+                blobToBase64(encodeWav(chunk, sampleRate)).then(b64 => {
+                  if (b64 && b64.length > 100 && ws.readyState === WebSocket.OPEN) {
+                    chunkIndex += 1;
+                    ws.send(JSON.stringify({ type: 'audio', data: b64, chunk_index: chunkIndex }));
+                  }
+                });
+              }
+            }, 500);
+            window._liveInterval = interval;
+            return;
+          }
+          if (msg.type === 'transcript') {
+            const utterances = msg.utterances || [];
+            if (utterances.length > 0) {
+              utterances.forEach(u => addUtterance(u, msg.chunk_index, chunkSecs));
+            } else if (msg.text) {
+              addUtterance({ speaker: 'unknown', start: 0, end: chunkSecs, text: msg.text }, msg.chunk_index, chunkSecs);
+            }
+            totalOffset += chunkSecs;
+            return;
+          }
+          if (msg.type === 'error') {
+            setStatus('错误: ' + (msg.message || ev.data), false);
+          }
+        } catch (_) {}
+      };
+
+      ws.onerror = () => setStatus('WebSocket 错误', false);
+      ws.onclose = () => setStatus('连接已断开', false);
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+    }
+
+    function stopRecording() {
+      if (window._liveInterval) {
+        clearInterval(window._liveInterval);
+        window._liveInterval = null;
+      }
+      if (waveRafId) { cancelAnimationFrame(waveRafId); waveRafId = null; }
+      waveWrapEl.classList.remove('active');
+      if (liveProcessor) { liveProcessor.disconnect(); liveProcessor = null; }
+      if (liveAnalyser) { liveAnalyser.disconnect(); liveAnalyser = null; }
+      if (liveSource) { liveSource.disconnect(); liveSource = null; }
+      if (liveCtx) { liveCtx.close().catch(() => {}); liveCtx = null; }
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'end' }));
+        ws.close();
+      }
+      setStatus('已停止', false);
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+
+    startBtn.onclick = startRecording;
+    stopBtn.onclick = stopRecording;
+  </script>
+</body>
+</html>
