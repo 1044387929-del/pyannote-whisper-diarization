@@ -40,3 +40,5 @@ plda/
 
 *.json
 *.jsonl
+
+reference_audio_project/
