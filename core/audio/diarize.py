@@ -14,7 +14,7 @@ from .config import CONFIG_PATH
 
 
 class DiarizationPipeline:
-    """pyannote 说话人分割流水线，封装模型加载与设备选择。"""
+    """pyannote 说话人分割流水线。"""
 
     def __init__(self, config_path: str | Path | None = None, device: torch.device | None = None):
         self.config_path = Path(config_path or CONFIG_PATH)
@@ -31,8 +31,7 @@ class DiarizationPipeline:
 
     def diarize(self, audio_path: str | Path) -> Annotation:
         """对整段音频做说话人分割，返回标注。"""
-        result = self.pipeline(str(audio_path))
-        return result.speaker_diarization
+        return self.pipeline(str(audio_path)).speaker_diarization
 
     def diarize_chunked(
         self,
@@ -43,7 +42,6 @@ class DiarizationPipeline:
         waveform, sample_rate = torchaudio.load(str(audio_path))
         duration_s = waveform.shape[1] / sample_rate
         num_chunks = max(1, math.ceil(duration_s / chunk_duration))
-
         for i in range(num_chunks):
             start_s = i * chunk_duration
             end_s = min(start_s + chunk_duration, duration_s)
@@ -68,7 +66,6 @@ _default_pipeline: DiarizationPipeline | None = None
 
 
 def _get_pipeline() -> Pipeline:
-    """兼容旧接口：返回 pyannote Pipeline 实例。"""
     global _default_pipeline
     if _default_pipeline is None:
         _default_pipeline = DiarizationPipeline()
@@ -76,7 +73,7 @@ def _get_pipeline() -> Pipeline:
 
 
 def diarize_whole(audio_path: str | Path) -> Annotation:
-    """整体切分：对整段音频一次性做说话人分割。"""
+    """整体切分。"""
     return DiarizationPipeline().diarize(audio_path)
 
 
@@ -84,5 +81,5 @@ def diarize_chunked(
     audio_path: str | Path,
     chunk_duration: float = 15,
 ) -> Generator[tuple[float, float, str], None, None]:
-    """按块切分：每块算完就 yield 该块结果。"""
+    """按块切分。"""
     yield from DiarizationPipeline().diarize_chunked(audio_path, chunk_duration)

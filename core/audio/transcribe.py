@@ -10,7 +10,7 @@ from .config import WHISPER_MODEL_PATH
 
 
 class WhisperTranscriber:
-    """Faster Whisper 转写器，封装模型加载与设备选择。"""
+    """Faster Whisper 转写器。"""
 
     def __init__(
         self,
@@ -60,7 +60,7 @@ class WhisperTranscriber:
         audio_path: str | Path,
         language: str | None = None,
     ) -> Iterator[tuple[float, float, str]]:
-        """流式转写：yield (start, end, text) 每个片段。"""
+        """流式转写：yield (start, end, text)。"""
         segments, _ = self.model.transcribe(str(audio_path), language=language, vad_filter=True)
         for s in segments:
             yield s.start, s.end, s.text or ""
@@ -70,7 +70,6 @@ _default_transcriber: WhisperTranscriber | None = None
 
 
 def _get_whisper_model() -> WhisperModel:
-    """兼容旧接口：返回 WhisperModel 实例。"""
     global _default_transcriber
     if _default_transcriber is None:
         _default_transcriber = WhisperTranscriber()
@@ -78,17 +77,17 @@ def _get_whisper_model() -> WhisperModel:
 
 
 def transcribe_chunk(audio_bytes: bytes, language: str | None = None) -> str:
-    """对单块音频（wav 格式）做 Whisper 转写，用于 live 模式。"""
+    """对单块音频（wav）做 Whisper 转写，用于 live 模式。"""
     return WhisperTranscriber().transcribe_bytes(audio_bytes, language=language)
 
 
 def transcribe_audio(
     audio_path: str,
-    model_path: str | None = None,
+    model_path: str | Path | None = None,
     device: str = "cuda",
     compute_type: str = "float16",
 ):
-    """使用 Faster Whisper 转写音频，逐段打印到控制台。"""
+    """使用 Faster Whisper 转写音频，逐段打印。"""
     t = WhisperTranscriber(model_path=model_path, device=device, compute_type=compute_type)
     segments, _ = t.model.transcribe(audio_path)
     for seg in segments:
@@ -97,7 +96,7 @@ def transcribe_audio(
 
 def transcribe_to_text(
     audio_path: str,
-    model_path: str | None = None,
+    model_path: str | Path | None = None,
     language: str | None = None,
 ) -> str:
     """转写音频并返回全文。"""

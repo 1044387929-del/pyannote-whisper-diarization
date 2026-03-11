@@ -8,7 +8,7 @@ from typing import List
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
-from core.pipeline import transcribe_with_speakers, transcribe_with_speakers_stream
+from core.audio import transcribe_with_speakers, transcribe_with_speakers_stream
 from utils.common import ALLOWED_EXT, get_audio_suffix, secs_to_hms
 from utils.errors import (
     ERR_AUDIO_EMPTY,

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from core.embedding import get_embedding
+from core.audio import get_embedding
 from utils.common import ALLOWED_EXT, get_audio_suffix
 from utils.errors import ERR_AUDIO_EMPTY, err_embedding_extract, err_unsupported_format
 

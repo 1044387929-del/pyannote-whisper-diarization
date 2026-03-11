@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from core.embedding import EmbeddingExtractor
+from core.audio import EmbeddingExtractor
 
 
 class SpeakerRegistry:

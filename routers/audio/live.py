@@ -8,8 +8,7 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 
-from core.pipeline import transcribe_chunk_with_speakers
-from core.transcribe import transcribe_chunk
+from core.audio import transcribe_chunk_with_speakers, transcribe_chunk
 from utils.common import webm_to_wav
 from utils.errors import ws_error
 
