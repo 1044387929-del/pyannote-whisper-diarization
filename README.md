@@ -27,10 +27,10 @@
 
 | 模块 | 职责 | 典型入口 |
 |------|------|----------|
-| **一、声纹与转写** | 音频 → 说话人分割 → 声纹匹配 → ASR → 带说话人标签的 utterance 列表 | `/embedding`、`/transcribe`、`/transcribe/stream`、`/ws/live-transcribe` |
-| **二、转写精修（LLM）** | 对已有转写结果做：推断 unknown 说话人、合并碎片、纠错标点、按句拆分、过滤无意义 | `POST /refine` |
+| **一、声纹与转写** | 音频 → 说话人分割 → 声纹匹配 → ASR → 带说话人标签的 utterance 列表 | `POST /embeddings`、`POST /transcriptions`、`POST /transcriptions/stream`、`/ws/transcriptions/live` |
+| **二、转写精修（LLM）** | 对已有转写结果做：推断 unknown 说话人、合并碎片、纠错标点、按句拆分、过滤无意义 | `POST /refinements` |
 
-两者可串联使用：先走声纹转写得到 `utterances`，再对结果调用 `/refine` 做精修。
+两者可串联使用：先走声纹转写得到 `utterances`，再对结果调用 `POST /refinements` 做精修。
 
 ---
 
@@ -56,7 +56,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           FastAPI (app.py)                                │
-│  /embedding │ /transcribe │ /transcribe/stream │ /ws/live-transcribe      │
+│  /embeddings │ /transcriptions │ /transcriptions/stream │ /ws/transcriptions/live │
 └─────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
@@ -112,7 +112,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        FastAPI (routers/llm/refine.py)                   │
-│                              POST /refine                                │
+│                              POST /refinements                           │
 └─────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
@@ -255,7 +255,7 @@ curl http://127.0.0.1:8001/health
 
 ### 一、声纹与转写
 
-#### POST /embedding
+#### POST /embeddings
 
 上传学号、姓名与音频，返回声纹 embedding。
 
@@ -278,7 +278,7 @@ curl http://127.0.0.1:8001/health
 
 ---
 
-#### POST /transcribe
+#### POST /transcriptions
 
 提交说话人列表与音频，返回完整转写结果（同步）。
 
@@ -308,9 +308,9 @@ curl http://127.0.0.1:8001/health
 
 ---
 
-#### POST /transcribe/stream
+#### POST /transcriptions/stream
 
-参数与 `/transcribe` 相同，响应为 **SSE 流**：每完成一句推送一条 `data:` 行（JSON 对象），最后推送一条 `status: "done"` 的汇总（含 `diarization_seconds`、`whisper_seconds` 等）。
+参数与 `POST /transcriptions` 相同，响应为 **SSE 流**：每完成一句推送一条 `data:` 行（JSON 对象），最后推送一条 `status: "done"` 的汇总（含 `diarization_seconds`、`whisper_seconds` 等）。
 
 **事件示例**：
 
@@ -321,7 +321,7 @@ data: {"status": "done", "total": 111, "progress": 100, "diarization_seconds": 1
 
 ---
 
-#### WebSocket /ws/live-transcribe
+#### WebSocket /ws/transcriptions/live
 
 实时转写：客户端发送音频块，服务端返回该块的转写结果。若在 `init` 中传入 `speakers`，则对该块做 diarization + 声纹匹配；否则仅做 Whisper 转写。
 
@@ -342,7 +342,7 @@ data: {"status": "done", "total": 111, "progress": 100, "diarization_seconds": 1
 
 ### 二、转写精修（LLM）
 
-#### POST /refine
+#### POST /refinements
 
 对已有转写结果做精修：推断 unknown 说话人、合并片段、纠错标点、按句拆分、过滤无意义。请求体为 JSON。
 
@@ -395,8 +395,8 @@ pyannote_diarization/
 │   ├── infer_speaker.py       # 推断说话人（Few-shot）
 │   └── correct_text.py        # 纠错与标点（Few-shot）
 ├── routers/
-│   ├── audio.py               # 【一】/embedding、/transcribe、/transcribe/stream、/ws/...
-│   └── llm/                   # 【二】/refine
+│   ├── audio/                 # 【一】/embeddings、/transcriptions、/transcriptions/stream、/ws/transcriptions/live
+│   └── llm/                   # 【二】/refinements
 ├── utils/
 │   ├── common.py
 │   └── errors.py

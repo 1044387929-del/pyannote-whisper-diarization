@@ -21,7 +21,7 @@ except ImportError:
 
 AUDIO_PATH = Path(r"/root/autodl-tmp/django_hmxy/pyannote_diarization/data/audio/audio_all.wav")
 SPEAKERS_JSON = Path(r"/root/autodl-tmp/django_hmxy/pyannote_diarization/data/json/speakers_embedding.json")
-URL = "ws://127.0.0.1:8001/ws/live_transcribe"
+URL = "ws://127.0.0.1:8001/ws/transcriptions/live"
 CHUNK_SECONDS = 10
 
 
@@ -73,7 +73,7 @@ async def main():
     else:
         print("[客户端] 未找到 speakers_embedding.json，将仅转写不分人")
 
-    print(f"[客户端] 连接 ws://127.0.0.1:8001/ws/live_transcribe")
+    print(f"[客户端] 连接 ws://127.0.0.1:8001/ws/transcriptions/live")
     print(f"[客户端] 音频 {AUDIO_PATH.name} 切分为 {len(chunks)} 块")
     print("-" * 50)
 

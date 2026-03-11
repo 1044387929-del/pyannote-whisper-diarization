@@ -11,8 +11,8 @@ from utils.errors import ERR_AUDIO_EMPTY, err_embedding_extract, err_unsupported
 router = APIRouter(tags=["embedding"])
 
 
-@router.post("/embedding")
-async def upload_audio_embedding(
+@router.post("/embeddings")
+async def create_embedding(
     student_id: str = Form(..., description="学号"),
     name: str = Form("", description="姓名（可选）"),
     audio: UploadFile = File(..., description="音频文件"),
@@ -21,7 +21,7 @@ async def upload_audio_embedding(
     上传学号 + 音频，返回 256 维 embedding 向量。
 
     curl 示例:
-      curl -X POST http://127.0.0.1:8001/embedding \\
+      curl -X POST http://127.0.0.1:8001/embeddings \\
         -F "student_id=2021001" -F "name=张三" -F "audio=@peppa.wav"
     """
     suf = Path(audio.filename or "").suffix.lower()

@@ -1,4 +1,4 @@
-"""测试 POST /refine 接口。需先启动服务: uvicorn app:app --host 0.0.0.0 --port 8001
+"""测试 POST /refinements 接口。需先启动服务: uvicorn app:app --host 0.0.0.0 --port 8001
 在项目根目录运行: python scripts/test/test_refine_api.py
 """
 import json
@@ -12,7 +12,7 @@ import requests
 
 INPUT_JSON = BASE / "data" / "json" / "transcribe_output.json"
 OUTPUT_JSON = BASE / "data" / "json" / "transcribe_output_refined_api.json"
-URL = "http://127.0.0.1:8001/refine"
+URL = "http://127.0.0.1:8001/refinements"
 
 
 def main():
@@ -33,7 +33,7 @@ def main():
         "context_size": 3,
     }
 
-    print(f"请求 POST {URL} ...")
+    print(f"请求 POST /refinements ...")
     try:
         r = requests.post(URL, json=body, timeout=600)
     except requests.exceptions.ConnectionError as e:

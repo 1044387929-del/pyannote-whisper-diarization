@@ -42,7 +42,7 @@
     <div class="config">
       <label>
         服务地址：
-        <input type="text" id="wsUrl" style="width: 320px;" placeholder="ws://host:8001/ws/live_transcribe">
+        <input type="text" id="wsUrl" style="width: 320px;" placeholder="ws://host:8001/ws/transcriptions/live">
       </label>
       <label>
         每块秒数：
@@ -68,7 +68,7 @@
     const wsUrlEl = document.getElementById('wsUrl');
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = location.hostname || '127.0.0.1';
-    wsUrlEl.value = `${proto}//${host}:8001/ws/live_transcribe`;
+    wsUrlEl.value = `${proto}//${host}:8001/ws/transcriptions/live`;
     const chunkSecsEl = document.getElementById('chunkSecs');
     const langEl = document.getElementById('lang');
     const startBtn = document.getElementById('startBtn');

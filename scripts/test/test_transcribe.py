@@ -1,4 +1,4 @@
-"""测试 /transcribe 接口。在项目根目录运行: python scripts/test_transcribe.py"""
+"""测试 POST /transcriptions 接口。在项目根目录运行: python scripts/test/test_transcribe.py"""
 import json
 import sys
 from pathlib import Path
@@ -11,7 +11,7 @@ import requests
 
 SPEAKERS_JSON = Path(r"../../data/json/speakers_embedding.json")
 AUDIO_PATH = Path(r"../../data/audio/audio_all.wav")
-URL = "http://127.0.0.1:8001/transcribe"
+URL = "http://127.0.0.1:8001/transcriptions"
 
 speakers = json.loads(SPEAKERS_JSON.read_text(encoding="utf-8"))
 data = [("language", "zh")]

@@ -6,8 +6,8 @@ from core.llm import run_pipeline
 router = APIRouter(tags=["refine"])
 
 
-@router.post("/refine")
-async def refine(body: dict):
+@router.post("/refinements")
+async def create_refinement(body: dict):
     """
     遍历式流水线：1) 推断 unknown 说话人  2) 合并同人同句碎片  3) 纠错与标点。
     请求体: {

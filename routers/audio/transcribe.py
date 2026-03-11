@@ -64,8 +64,8 @@ async def _stream_transcribe_events(tmp_path: str, speakers_list: list, lang: st
         print(f"[服务端] 流式转录结束 | 共 {count} 句")
 
 
-@router.post("/transcribe")
-async def transcribe_audio(
+@router.post("/transcriptions")
+async def create_transcription(
     student_id: List[str] = Form(..., description="学号，可多个，按顺序与 name、embedding 对应"),
     name: List[str] = Form(..., description="姓名，可多个"),
     embedding: List[str] = Form(..., description="256 维向量 JSON 字符串，如 [0.1,-0.2,...]"),
@@ -77,7 +77,7 @@ async def transcribe_audio(
     三元组用重复的 form 字段传递，三列按索引一一对应。
 
     curl 示例（2 个说话人）:
-      curl -X POST http://127.0.0.1:8001/transcribe \\
+      curl -X POST http://127.0.0.1:8001/transcriptions \\
         -F "student_id=2021001" -F "student_id=2021002" \\
         -F "name=张三" -F "name=李四" \\
         -F "embedding=[-0.13,0.12,...]" -F "embedding=[0.2,-0.1,...]" \\
@@ -112,12 +112,12 @@ async def transcribe_audio(
 
     try:
         lang = language.strip() or None
-        print(f"[服务端] /transcribe 转录开始 | 说话人数: {n} | 音频: {audio.filename}")
+        print(f"[服务端] /transcriptions 转录开始 | 说话人数: {n} | 音频: {audio.filename}")
         loop = asyncio.get_event_loop()
         utterances = await loop.run_in_executor(
             None, lambda: transcribe_with_speakers(tmp_path, speakers_list, language=lang)
         )
-        print(f"[服务端] /transcribe 转录完成 | 共 {len(utterances)} 句")
+        print(f"[服务端] /transcriptions 转录完成 | 共 {len(utterances)} 句")
         return {"utterances": utterances}
     except Exception as e:
         raise HTTPException(**err_transcribe(e))
@@ -125,8 +125,8 @@ async def transcribe_audio(
         Path(tmp_path).unlink(missing_ok=True)
 
 
-@router.post("/transcribe/stream")
-async def transcribe_audio_stream(
+@router.post("/transcriptions/stream")
+async def create_transcription_stream(
     student_id: List[str] = Form(..., description="学号，可多个，按顺序与 name、embedding 对应"),
     name: List[str] = Form(..., description="姓名，可多个"),
     embedding: List[str] = Form(..., description="256 维向量 JSON 字符串，如 [0.1,-0.2,...]"),
@@ -134,10 +134,10 @@ async def transcribe_audio_stream(
     language: str = Form("", description="Whisper 语言，如 zh、en，空则自动检测"),
 ):
     """
-    流式转录：参数与 /transcribe 相同，每完成一句即通过 SSE 推送，无需等待全部完成。
+    流式转录：参数与 POST /transcriptions 相同，每完成一句即通过 SSE 推送，无需等待全部完成。
 
     curl 示例（SSE 流式接收）:
-      curl -N -X POST http://127.0.0.1:8001/transcribe/stream \\
+      curl -N -X POST http://127.0.0.1:8001/transcriptions/stream \\
         -F "student_id=2021001" -F "student_id=2021002" \\
         -F "name=张三" -F "name=李四" \\
         -F "embedding=[-0.13,0.12,...]" -F "embedding=[0.2,-0.1,...]" \\

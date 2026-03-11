@@ -18,9 +18,9 @@ app = FastAPI(
     description="embedding 提取、转录、Live 转写；大模型纠错与说话人猜测",
 )
 
-# 音频转录相关（无 prefix，路径保持 /embedding、/transcribe、/live、/ws/live_transcribe）
+# 音频转录：REST 风格 /embeddings、/transcriptions、/transcriptions/stream、/live、/ws/transcriptions/live
 app.include_router(audio.router)
-# 大模型纠正相关（无 prefix，路径为 /correct、/guess_speakers）
+# 大模型精修：REST 风格 POST /refinements
 app.include_router(llm.router)
 # 健康检查
 app.include_router(health.router)

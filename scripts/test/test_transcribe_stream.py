@@ -1,4 +1,4 @@
-"""测试 /transcribe/stream 流式接口。先启动 uvicorn app:app，然后运行: python pyannote_diarization/scripts/test/test_transcribe_stream.py"""
+"""测试 POST /transcriptions/stream 流式接口。先启动 uvicorn app:app，再运行本脚本。"""
 import json
 import sys
 from pathlib import Path
@@ -12,7 +12,7 @@ import requests
 
 SPEAKERS_JSON = Path(r"/root/autodl-tmp/django_hmxy/pyannote_diarization/data/json/speakers_embedding.json")
 AUDIO_PATH = Path(r"/root/autodl-tmp/django_hmxy/pyannote_diarization/data/audio/audio_all.wav")
-URL = "http://127.0.0.1:8001/transcribe/stream"
+URL = "http://127.0.0.1:8001/transcriptions/stream"
 
 speakers = json.loads(SPEAKERS_JSON.read_text(encoding="utf-8"))
 data = [("language", "zh")]
@@ -21,7 +21,7 @@ for s in speakers:
     data.append(("name", s["name"]))
     data.append(("embedding", json.dumps(s["embedding"], ensure_ascii=False)))
 
-print("[客户端] POST /transcribe/stream 流式转录，开始请求...")
+print("[客户端] POST /transcriptions/stream 流式转录，开始请求...")
 print("-" * 50)
 
 with open(AUDIO_PATH, "rb") as f:

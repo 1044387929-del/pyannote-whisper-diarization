@@ -24,8 +24,8 @@ async def live_page():
     return FileResponse(STATIC_DIR / "live.html")
 
 
-@router.websocket("/ws/live_transcribe")
-async def websocket_live_transcribe(websocket: WebSocket):
+@router.websocket("/ws/transcriptions/live")
+async def websocket_transcriptions_live(websocket: WebSocket):
     """
     WebSocket 实时转写：客户端持续发送音频块，服务端近似实时返回转写结果。
     init 传入 speakers 时做 diarization + 声纹匹配（分人），否则仅 Whisper 转写。

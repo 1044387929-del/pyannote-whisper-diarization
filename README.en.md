@@ -27,10 +27,10 @@ Multi-speaker speech transcription and speaker recognition service built on **py
 
 | Part | Role | Entrypoints |
 |------|------|-------------|
-| **I. Voice & Transcription** | Audio → diarization → speaker matching → ASR → utterance list with speaker labels | `/embedding`, `/transcribe`, `/transcribe/stream`, `/ws/live-transcribe` |
-| **II. Transcript Refinement (LLM)** | Post-process existing transcripts: infer unknown speakers, merge fragments, correct text & punctuation, split by sentence, filter noise | `POST /refine` |
+| **I. Voice & Transcription** | Audio → diarization → speaker matching → ASR → utterance list with speaker labels | `POST /embeddings`, `POST /transcriptions`, `POST /transcriptions/stream`, `/ws/transcriptions/live` |
+| **II. Transcript Refinement (LLM)** | Post-process existing transcripts: infer unknown speakers, merge fragments, correct text & punctuation, split by sentence, filter noise | `POST /refinements` |
 
-You can chain them: run voice & transcription to get `utterances`, then call `/refine` on the result.
+You can chain them: run voice & transcription to get `utterances`, then call `POST /refinements` on the result.
 
 ---
 
@@ -56,7 +56,7 @@ Turns audio into speaker-labeled text segments (utterance list). Supports embedd
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           FastAPI (app.py)                               │
-│  /embedding │ /transcribe │ /transcribe/stream │ /ws/live-transcribe     │
+│  /embeddings │ /transcriptions │ /transcriptions/stream │ /ws/transcriptions/live │
 └─────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
@@ -112,7 +112,7 @@ Post-processes **existing** transcript utterance lists: infer unknown speakers, 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        FastAPI (routers/llm/refine.py)                   │
-│                              POST /refine                                │
+│                              POST /refinements                           │
 └─────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
@@ -251,7 +251,7 @@ Open **http://127.0.0.1:8001/live** for the Live transcription page (microphone 
 
 ### Part I: Voice & Transcription
 
-#### POST /embedding
+#### POST /embeddings
 
 Upload student ID, name and audio; returns voice embedding.
 
@@ -274,7 +274,7 @@ Upload student ID, name and audio; returns voice embedding.
 
 ---
 
-#### POST /transcribe
+#### POST /transcriptions
 
 Submit speaker list and audio; returns full transcript (synchronous).
 
@@ -304,9 +304,9 @@ Submit speaker list and audio; returns full transcript (synchronous).
 
 ---
 
-#### POST /transcribe/stream
+#### POST /transcriptions/stream
 
-Same parameters as `/transcribe`; response is an **SSE stream**: one `data:` line per completed utterance (JSON), then a final line with `status: "done"` and `diarization_seconds`, `whisper_seconds`, etc.
+Same parameters as `POST /transcriptions`; response is an **SSE stream**: one `data:` line per completed utterance (JSON), then a final line with `status: "done"` and `diarization_seconds`, `whisper_seconds`, etc.
 
 **Example events**:
 
@@ -317,7 +317,7 @@ data: {"status": "done", "total": 111, "progress": 100, "diarization_seconds": 1
 
 ---
 
-#### WebSocket /ws/live-transcribe
+#### WebSocket /ws/transcriptions/live
 
 Live transcription: client sends audio chunks; server returns transcript per chunk. If `speakers` is sent in `init`, diarization + speaker matching is applied; otherwise Whisper-only.
 
@@ -338,7 +338,7 @@ Use WAV chunks; 5–15 seconds per chunk recommended.
 
 ### Part II: Transcript Refinement (LLM)
 
-#### POST /refine
+#### POST /refinements
 
 Refine an existing transcript: infer unknown speakers, merge fragments, correct text and punctuation, split by sentence, filter meaningless. Request body is JSON.
 
@@ -391,8 +391,8 @@ pyannote_diarization/
 │   ├── infer_speaker.py       # Speaker inference (few-shot)
 │   └── correct_text.py        # Correction & punctuation (few-shot)
 ├── routers/
-│   ├── audio.py               # [Part I] /embedding, /transcribe, /transcribe/stream, /ws/...
-│   └── llm/                   # [Part II] /refine
+│   ├── audio/                 # [Part I] /embeddings, /transcriptions, /transcriptions/stream, /ws/transcriptions/live
+│   └── llm/                   # [Part II] /refinements
 ├── utils/
 │   ├── common.py
 │   └── errors.py
