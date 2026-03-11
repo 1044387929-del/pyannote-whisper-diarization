@@ -292,6 +292,72 @@ def filter_empty_and_meaningless(utterances: List[dict], verbose: bool = True) -
     return out
 
 
+class RefinePipeline:
+    """
+    转写精修流水线（面向对象封装）。
+    配置集中在实例上，便于维护与复用；入口为 async run(utterances)。
+    """
+
+    def __init__(
+        self,
+        llm=None,
+        *,
+        infer_speakers: bool = True,
+        merge: bool = True,
+        correct_text: bool = True,
+        filter_meaningless: bool = True,
+        context_size: int = 3,
+        verbose: bool = False,
+        correct_max_concurrent: int = 10,
+    ):
+        if llm is None:
+            from .llm_client import get_llm
+            llm = get_llm()
+        self.llm = llm
+        self.infer_speakers = infer_speakers
+        self.merge = merge
+        self.correct_text = correct_text
+        self.filter_meaningless = filter_meaningless
+        self.context_size = context_size
+        self.verbose = verbose
+        self.correct_max_concurrent = correct_max_concurrent
+
+    async def run(self, utterances: List[dict]) -> List[dict]:
+        """执行精修流水线，返回精修后的 utterance 列表。"""
+        if not utterances:
+            return []
+        # 深拷贝原始列表
+        original = copy.deepcopy(utterances)
+        # 深拷贝原始列表
+        out = copy.deepcopy(utterances)
+        # 获取允许的说话人列表
+        allowed_speakers = _get_allowed_speakers(original)
+
+        # 如果需要推断说话人，并且有 unknown 说话人，则推断说话人
+        if self.infer_speakers and _has_unknown_speaker(out):
+            # 推断说话人
+            out = await infer_unknown_speakers(
+                out, original, self.llm, allowed_speakers,
+                context_size=self.context_size, verbose=self.verbose,
+            )
+        # 如果需要合并片段，则合并片段
+        if self.merge:
+            # 合并片段
+            out = merge_fragments(out, verbose=self.verbose)
+        # 如果需要纠错文本，则纠错文本
+        if self.correct_text:
+            # 纠错文本
+            out = await correct_utterance_texts(
+                out, self.llm, verbose=self.verbose,
+                max_concurrent=self.correct_max_concurrent,
+            )
+        out = split_utterances_by_sentence(out, verbose=self.verbose)
+        if self.filter_meaningless:
+            out = filter_empty_and_meaningless(out, verbose=self.verbose)
+        out = _force_no_unknown(out, verbose=self.verbose)
+        return out
+
+
 async def run_pipeline(
     utterances: List[dict],
     llm=None,
@@ -303,44 +369,18 @@ async def run_pipeline(
     verbose: bool = False,
     correct_max_concurrent: int = 10,
 ) -> List[dict]:
-    """
-    流水线：推断说话人顺序 ainvoke，纠错步骤并发请求，减少总耗时与阻塞。
-    Args:
-        utterances: 原始文本列表
-        llm: LLM 客户端
-        infer_speakers: 是否推断说话人
-        merge: 是否合并片段
-        correct_text: 是否纠错文本
-        filter_meaningless: 是否过滤无意义文本
-        context_size: 上下文大小
-        verbose: 是否打印详细信息
-    """
-    if not utterances:
-        return []
-    if llm is None:
-        from .llm_client import get_llm
-        llm = get_llm()
-    original = copy.deepcopy(utterances)
-    out = copy.deepcopy(utterances)
-    allowed_speakers = _get_allowed_speakers(original)
-    # 仅当存在 unknown 时才调用 LLM 推断说话人，避免浪费 token
-    if infer_speakers and _has_unknown_speaker(out):
-        out = await infer_unknown_speakers(
-            out, original, llm, allowed_speakers, context_size=context_size, verbose=verbose
-        )
-    if merge:
-        out = merge_fragments(out, verbose=verbose)
-    if correct_text:
-        out = await correct_utterance_texts(
-            out, llm, verbose=verbose, max_concurrent=correct_max_concurrent
-        )
-    # 按句末标点拆分：一句一 utterance
-    out = split_utterances_by_sentence(out, verbose=verbose)
-    if filter_meaningless:
-        out = filter_empty_and_meaningless(out, verbose=verbose)
-    # 兜底：保证输出中不允许 unknown，未归属的均归为默认说话人
-    out = _force_no_unknown(out, verbose=verbose)
-    return out
+    """兼容入口：构造 RefinePipeline 并执行 run。保留原有函数式调用方式。"""
+    pipeline = RefinePipeline(
+        llm=llm,
+        infer_speakers=infer_speakers,
+        merge=merge,
+        correct_text=correct_text,
+        filter_meaningless=filter_meaningless,
+        context_size=context_size,
+        verbose=verbose,
+        correct_max_concurrent=correct_max_concurrent,
+    )
+    return await pipeline.run(utterances)
 
 
 def _force_no_unknown(utterances: List[dict], verbose: bool = True) -> List[dict]:
