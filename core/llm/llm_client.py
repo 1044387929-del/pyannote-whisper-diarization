@@ -4,10 +4,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# 项目根（core/llm/llm_client.py -> 向上 2 层）
-# _BASE_DIR = Path(__file__).resolve().parent.parent
-# _ENV_PATH = _BASE_DIR / "config" / "llm_model.env"
-_ENV_PATH = Path(r"../../config/llm_model.env")
+# 项目根（core/llm/llm_client.py -> 向上 2 层），避免依赖 cwd
+_BASE_DIR = Path(__file__).resolve().parent.parent.parent
+_ENV_PATH = _BASE_DIR / "config" / "llm_model.env"
 if _ENV_PATH.exists():
     load_dotenv(dotenv_path=_ENV_PATH)
 

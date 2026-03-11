@@ -3,19 +3,19 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Multi-speaker speech transcription and speaker recognition service built on **pyannote.audio** and **Faster-Whisper**. Provides voice embedding extraction, batch/streaming transcription, and WebSocket live transcription, with optional speaker identification by student ID and name.
+Multi-speaker speech transcription and speaker recognition service built on **pyannote.audio** and **Faster-Whisper**. The project is split into **two business parts**: (I) Voice & Transcription (audio → speaker-labeled utterances), and (II) Transcript Refinement (LLM-based speaker inference, correction, punctuation, and sentence splitting).
 
 ---
 
 ## Table of Contents
 
-- [Features](#features)
-- [Architecture](#architecture)
+- [Business Overview](#business-overview)
+- [Part I: Voice & Transcription](#part-i-voice--transcription)
+- [Part II: Transcript Refinement (LLM)](#part-ii-transcript-refinement-llm)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [API Reference](#api-reference)
-- [Transcription Pipeline](#transcription-pipeline)
 - [Project Structure](#project-structure)
 - [Development & Testing](#development--testing)
 - [Contributing](#contributing)
@@ -23,24 +23,35 @@ Multi-speaker speech transcription and speaker recognition service built on **py
 
 ---
 
-## Features
+## Business Overview
+
+| Part | Role | Entrypoints |
+|------|------|-------------|
+| **I. Voice & Transcription** | Audio → diarization → speaker matching → ASR → utterance list with speaker labels | `/embedding`, `/transcribe`, `/transcribe/stream`, `/ws/live-transcribe` |
+| **II. Transcript Refinement (LLM)** | Post-process existing transcripts: infer unknown speakers, merge fragments, correct text & punctuation, split by sentence, filter noise | `POST /refine` |
+
+You can chain them: run voice & transcription to get `utterances`, then call `/refine` on the result.
+
+---
+
+## Part I: Voice & Transcription
+
+Turns audio into speaker-labeled text segments (utterance list). Supports embedding registration, batch/streaming transcription, and WebSocket live transcription.
+
+### 1.1 Features
 
 | Feature | Description |
 |--------|-------------|
-| **Voice embedding** | Upload student ID + name + audio; returns a 256-dim embedding vector for speaker registration |
+| **Voice embedding** | Upload student ID + name + audio; returns 256-dim embedding for speaker registration |
 | **Batch transcription** | Submit speaker list (student_id, name, embedding) + audio; returns full transcript JSON with speaker labels |
-| **Streaming transcription** | Same params as batch; results streamed via **Server-Sent Events (SSE)** with progress and timing |
+| **Streaming transcription** | Same params; results streamed via **Server-Sent Events (SSE)** with progress and timing |
 | **Live transcription** | **WebSocket**: send audio chunks, receive near real-time transcripts; pass `speakers` in `init` for diarization + speaker matching, otherwise Whisper-only |
 
 - Supports WAV, MP3, WebM and other common formats (via pydub).
 - Speaker matching uses cosine similarity with configurable threshold.
-- Streaming endpoint is suitable for long audio; results can be displayed incrementally.
+- Streaming is suitable for long audio; results can be shown incrementally.
 
----
-
-## Architecture
-
-### Overview
+### 1.2 Architecture & Data Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -50,36 +61,112 @@ Multi-speaker speech transcription and speaker recognition service built on **py
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                     core/pipeline.py (DiarizedTranscriber)               │
-│  1. Diarization  2. Embedding  3. Speaker match  4. Whisper ASR         │
+│                     core/pipeline.py (DiarizedTranscriber)                │
+│  1. Diarization  2. Embedding  3. Speaker match  4. Whisper ASR            │
 └─────────────────────────────────────────────────────────────────────────┘
          │                    │                    │                    │
          ▼                    ▼                    ▼                    ▼
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│ core/diarize │    │core/embedding │    │  speakers   │    │core/transcribe│
-│ pyannote     │    │ Wespeaker     │    │ Registry    │    │Faster-Whisper │
-│ Pipeline     │    │ 256-dim       │    │ cosine match│    │ ASR           │
+│ core/diarize │    │core/embedding│    │  speakers   │    │core/transcribe│
+│ pyannote     │    │ Wespeaker    │    │ Registry    │    │Faster-Whisper │
+│ Pipeline     │    │ 256-dim      │    │ cosine match│    │ ASR           │
 └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
 ```
 
-### Data Flow (Transcription)
-
 1. **Input**: Audio file (or WebSocket chunks) + optional speaker list `[{ student_id, name, embedding }, ...]`.
-2. **Speaker diarization**: pyannote.audio runs segmentation + clustering, outputting segments `(start, end, speaker_label)` with anonymous labels (e.g. SPEAKER_00).
-3. **Embedding extraction**: Each segment is passed through the same Wespeaker-style model to get a 256-dim embedding.
-4. **Speaker matching**: Segment embeddings are compared to user-provided speaker embeddings via cosine similarity; above-threshold matches get student_id/name, else `unknown`.
-5. **ASR**: Faster-Whisper transcribes each segment to text.
-6. **Output**: Combined into utterances `{ start, end, speaker, student_id, text }`; streamed or sent over WebSocket per sentence or per chunk.
+2. **Diarization**: pyannote.audio runs segmentation → clustering, outputting `(start, end, speaker_label)` segments (e.g. SPEAKER_00).
+3. **Embedding**: 256-dim embedding per segment (Wespeaker, same as pyannote).
+4. **Speaker matching**: Cosine similarity with request embeddings; above threshold → student_id/name, else `unknown`.
+5. **ASR**: Faster-Whisper transcribes each segment.
+6. **Output**: Utterances `{ start, end, speaker, student_id, text }`; streamed or sent per sentence/chunk.
 
-### Tech Stack
+### 1.3 Tech Stack (Voice & Transcription)
 
 | Component | Technology | Notes |
 |-----------|------------|--------|
 | Web | FastAPI | REST, SSE, WebSocket |
-| Diarization | pyannote.audio ≥3.1 | Segmentation + clustering + optional PLDA |
+| Diarization | pyannote.audio ≥3.1 | Segmentation + clustering + PLDA |
 | Embedding | Wespeaker (e.g. voxceleb-resnet34-LM) | 256-dim speaker embedding |
 | ASR | Faster-Whisper | Streaming/offline, multilingual |
-| Matching | Custom (speakers.py) | Cosine similarity + threshold, SpeakerRegistry |
+| Matching | speakers.py | Cosine similarity + threshold, SpeakerRegistry |
+
+---
+
+## Part II: Transcript Refinement (LLM)
+
+Post-processes **existing** transcript utterance lists: infer unknown speakers, merge same-speaker fragments, correct text and punctuation, split by sentence, filter meaningless segments. Fully async pipeline; correction step uses concurrent LLM calls to reduce latency.
+
+### 2.1 Pipeline Steps
+
+| Step | Description |
+|------|-------------|
+| **Infer unknown speakers** | Call LLM only for `speaker=unknown`; pick one allowed speaker from context; skip when already labeled to save tokens |
+| **Merge fragments** | Merge consecutive same-speaker segments when the previous segment has no sentence-ending punctuation |
+| **Correct & punctuate** | Call LLM per segment for typo/homophone correction and punctuation; requests run concurrently |
+| **Split by sentence** | Split on sentence-ending punctuation (。！？.!?) so one sentence = one utterance |
+| **Filter meaningless** | Drop empty text and filler-only segments |
+| **Fallback** | Ensure no `unknown` in output; assign remaining unknowns to a default speaker |
+
+### 2.2 Architecture & Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        FastAPI (routers/llm/refine.py)                   │
+│                              POST /refine                                │
+└─────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│              core/llm/refine_pipeline.py · run_pipeline()                │
+│  Input: utterances[]  Output: refined utterances[] (one per sentence,   │
+│  no unknown)                                                             │
+└─────────────────────────────────────────────────────────────────────────┘
+         │                │                │                │
+         ▼                ▼                ▼                ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ 1. Infer     │  │ 2. Merge     │  │ 3. Correct   │  │ 4. Split     │
+│ speaker      │  │ fragments   │  │ & punctuate  │  │ by sentence  │
+│ (unknown only)│  │ (rules)     │  │ (concurrent) │  │ by_sentence  │
+└──────┬───────┘  └──────────────┘  └──────┬───────┘  └──────┬───────┘
+       │                                   │                 │
+       ▼                                   ▼                 │
+┌──────────────┐                    ┌──────────────┐         │
+│ prompts/     │                    │ prompts/     │         │
+│ infer_       │                    │ correct_     │         │
+│ speaker.py   │                    │ text.py      │         │
+└──────┬───────┘                    └──────┬───────┘         │
+       │                                   │                 │
+       └───────────────┬───────────────────┘                 │
+                       ▼                                      │
+              ┌──────────────────┐                            │
+              │ core/llm/        │                            │
+              │ llm_client       │                            │
+              │ (DashScope/qwen) │                            │
+              └──────────────────┘                            │
+                                                              │
+         ┌────────────────────────────────────────────────────┘
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 5. Filter meaningless (filter_empty_and_meaningless)          │
+│ 6. Fallback (_force_no_unknown, unknown→default speaker)     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+1. **Input**: `utterances` with `start`, `end`, `speaker`, `student_id`, `text`; may contain `unknown`, fragments, no punctuation.
+2. **Infer speaker**: For `speaker=unknown` only, build context + `prompts/infer_speaker` and call LLM (sequential ainvoke).
+3. **Merge**: Same speaker and no sentence end → merge; rules only, no LLM.
+4. **Correct & punctuate**: Per-segment text + `prompts/correct_text` and LLM; async concurrent (Semaphore-limited).
+5. **Split by sentence**: Split on `。！？.!?`; one sentence per utterance; time split by character ratio.
+6. **Filter & fallback**: Drop empty/filler; assign remaining `unknown` to default speaker.
+7. **Output**: Refined `utterances`, one sentence per utterance and no `unknown`.
+
+### 2.3 Tech Stack (Refinement)
+
+| Component | Description |
+|-----------|-------------|
+| LLM | LangChain ChatOpenAI, DashScope-compatible (e.g. qwen); set `DASHSCOPE_API_KEY` in `config/llm_model.env` |
+| Prompts | `prompts/infer_speaker.py` (speaker inference), `prompts/correct_text.py` (correction & punctuation); few-shot as HumanMessage/AIMessage |
+| Pipeline | `core/llm/refine_pipeline.py`: async `run_pipeline()` with flags `infer_speakers`, `merge`, `correct_text`, `filter_meaningless` |
 
 ---
 
@@ -88,9 +175,9 @@ Multi-speaker speech transcription and speaker recognition service built on **py
 - **Python**: 3.10 or 3.12 (recommended; tested on 3.12).
 - **Runtime**: 8GB+ RAM recommended; GPU optional (pyannote and Whisper can use CUDA).
 - **Models**:
-  - pyannote: segmentation and embedding checkpoints (local paths or HuggingFace/ModelScope IDs).
-  - PLDA: optional, for clustering refinement; requires `xvec_transform.npz` and `plda.npz`.
-  - Faster-Whisper: download a model (e.g. large-v3) and set path in `core/config.py`.
+  - pyannote: segmentation and embedding (local or HuggingFace/ModelScope IDs).
+  - PLDA: optional, for clustering refinement; requires `xvec_transform.npz`, `plda.npz`.
+  - Faster-Whisper: download model (e.g. large-v3) and set path in `core/config.py`.
 
 ---
 
@@ -108,15 +195,11 @@ pip install -r requirements.txt
 
 ### 2. Configuration
 
-- In **`core/config.py`** set:
-  - `WHISPER_MODEL_PATH`: Faster-Whisper model directory.
-  - `EMBEDDING_MODEL_PATH`: optional override for embedding model.
-- In **`config.yaml`** set:
-  - `pipeline.params.segmentation` / `embedding`: pyannote model paths or HuggingFace IDs.
-  - `pipeline.params.plda.checkpoint`: PLDA directory if used.
-  - `params.clustering.threshold`, `min_cluster_size`, etc. as needed.
+- **core/config.py**: `WHISPER_MODEL_PATH`, `EMBEDDING_MODEL_PATH`, `CONFIG_PATH`, `PLDA_DIR`, `DATA_DIR`.
+- **config.yaml**: pyannote pipeline and clustering (segmentation, embedding, plda, clustering). See table below.
+- **config/llm_model.env** (for Part II): Set `DASHSCOPE_API_KEY` (or your LLM API key).
 
-If using pyannote models from Hugging Face, accept the model terms and set `HF_TOKEN` (see pyannote docs).
+If using pyannote from Hugging Face, accept model terms and set `HF_TOKEN`.
 
 ### 3. Run the server
 
@@ -130,36 +213,30 @@ uvicorn app:app --host 0.0.0.0 --port 8001 --reload
 curl http://127.0.0.1:8001/health
 ```
 
-Open **http://127.0.0.1:8001/live** in a browser for the Live transcription page (microphone + WebSocket).
+Open **http://127.0.0.1:8001/live** for the Live transcription page (microphone + WebSocket).
 
 ---
 
 ## Configuration
 
-### core/config.py
+### Part I: Voice & Transcription
 
-| Variable | Description |
-|----------|-------------|
-| `BASE_DIR` | Project root (auto) |
-| `CONFIG_PATH` | Path to config.yaml |
-| `PLDA_DIR` | Local PLDA directory (optional) |
-| `EMBEDDING_MODEL_PATH` | Embedding model path (.bin or dir) |
-| `WHISPER_MODEL_PATH` | Faster-Whisper model directory |
-| `DATA_DIR` | Data directory (optional) |
-
-### config.yaml
+- **core/config.py**: `WHISPER_MODEL_PATH`, `EMBEDDING_MODEL_PATH`, `CONFIG_PATH`, `PLDA_DIR`, `DATA_DIR`.
+- **config.yaml**: pyannote pipeline and clustering.
 
 | Option | Description |
 |--------|-------------|
 | `pipeline.params.segmentation` | Segmentation model path or HuggingFace ID |
 | `pipeline.params.embedding` | Embedding model path or HF ID |
 | `pipeline.params.embedding_batch_size` | Embedding batch size |
-| `pipeline.params.segmentation_batch_size` | Segmentation batch size |
-| `pipeline.params.plda.checkpoint` | PLDA dir (must contain xvec_transform.npz, plda.npz) |
-| `params.segmentation.min_duration_off` | Min silence between speakers (seconds) |
-| `params.clustering.method` | Clustering method (e.g. centroid) |
-| `params.clustering.threshold` | Cosine distance threshold for merging clusters |
+| `pipeline.params.plda.checkpoint` | PLDA dir (xvec_transform.npz, plda.npz) |
+| `params.clustering.threshold` | Cosine distance threshold for merging |
 | `params.clustering.min_cluster_size` | Min samples per cluster |
+
+### Part II: Transcript Refinement (LLM)
+
+- **config/llm_model.env**: `DASHSCOPE_API_KEY` (or your LLM provider key).
+- **core/llm/llm_client.py**: `get_llm()` defaults to qwen-plus and DashScope-compatible endpoint; override model/api_base if needed.
 
 ---
 
@@ -172,7 +249,9 @@ Open **http://127.0.0.1:8001/live** in a browser for the Live transcription page
 
 ---
 
-### POST /embedding
+### Part I: Voice & Transcription
+
+#### POST /embedding
 
 Upload student ID, name and audio; returns voice embedding.
 
@@ -195,7 +274,7 @@ Upload student ID, name and audio; returns voice embedding.
 
 ---
 
-### POST /transcribe
+#### POST /transcribe
 
 Submit speaker list and audio; returns full transcript (synchronous).
 
@@ -225,9 +304,9 @@ Submit speaker list and audio; returns full transcript (synchronous).
 
 ---
 
-### POST /transcribe/stream
+#### POST /transcribe/stream
 
-Same parameters as `/transcribe`; response is an **SSE stream**: one `data:` line per completed utterance (JSON object), then a final summary line with `status: "done"` and `diarization_seconds`, `whisper_seconds`, etc.
+Same parameters as `/transcribe`; response is an **SSE stream**: one `data:` line per completed utterance (JSON), then a final line with `status: "done"` and `diarization_seconds`, `whisper_seconds`, etc.
 
 **Example events**:
 
@@ -238,9 +317,9 @@ data: {"status": "done", "total": 111, "progress": 100, "diarization_seconds": 1
 
 ---
 
-### WebSocket /ws/live-transcribe
+#### WebSocket /ws/live-transcribe
 
-Live transcription: client sends audio chunks; server returns transcript for each chunk. If `speakers` is sent in `init`, diarization + speaker matching is applied to the chunk; otherwise Whisper-only.
+Live transcription: client sends audio chunks; server returns transcript per chunk. If `speakers` is sent in `init`, diarization + speaker matching is applied; otherwise Whisper-only.
 
 **Message types**:
 
@@ -253,7 +332,35 @@ Live transcription: client sends audio chunks; server returns transcript for eac
 | Client → | `end` | `{ "type": "end" }` |
 | Server ← | `done` | `{ "type": "done", "total_chunks": N }` |
 
-Use WAV chunks; 5–15 seconds per chunk is recommended.
+Use WAV chunks; 5–15 seconds per chunk recommended.
+
+---
+
+### Part II: Transcript Refinement (LLM)
+
+#### POST /refine
+
+Refine an existing transcript: infer unknown speakers, merge fragments, correct text and punctuation, split by sentence, filter meaningless. Request body is JSON.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| utterances | array | yes | Transcript list; each item has `start`, `end`, `speaker`, `student_id`, `text` |
+| infer_speakers | bool | no | Whether to infer unknown speakers; default true |
+| merge | bool | no | Whether to merge same-speaker fragments; default true |
+| correct_text | bool | no | Whether to correct and punctuate; default true |
+| context_size | int | no | Context size (sentences) for speaker inference; default 3 |
+
+**Response** `200 OK`:
+
+```json
+{
+  "utterances": [
+    { "start": 3.0, "end": 5.2, "speaker": "peppa", "student_id": "T2", "text": "I am Peppa. This is my brother George." }
+  ]
+}
+```
+
+Output is guaranteed to have a speaker for every utterance (no `unknown`) and one utterance per sentence (split by sentence-ending punctuation).
 
 ---
 
@@ -263,38 +370,41 @@ Unsupported format, empty audio, embedding/transcription failures, etc. return a
 
 ---
 
-## Transcription Pipeline
-
-1. **Diarization** (core/diarize.py): Load pyannote Pipeline from config.yaml; run segmentation → embedding → clustering (+ optional PLDA) to get an `Annotation` of speaker segments.
-2. **Speaker matching** (speakers.py): Extract embedding per segment with the same model; cosine similarity against request speakers; assign `speaker` / `student_id` when above threshold.
-3. **ASR** (core/transcribe.py): Faster-Whisper transcribes each segment by time range.
-4. **Output**: Build `Utterance(start, end, speaker, student_id, text)` list; for stream/WebSocket, emit per sentence or per chunk with progress and timing.
-
----
-
 ## Project Structure
 
 ```
 pyannote_diarization/
-├── app.py                  # FastAPI app: routes, /embedding, /transcribe, SSE, WebSocket
-├── config.yaml              # pyannote pipeline and clustering config
-├── speakers.py              # SpeakerRegistry: build list + cosine match
+├── app.py                     # FastAPI entry; mounts audio / llm / health routers
+├── config.yaml                # [Part I] pyannote pipeline and clustering
+├── speakers.py                # [Part I] SpeakerRegistry, cosine matching
 ├── core/
-│   ├── __init__.py
-│   ├── config.py            # Paths and model paths
-│   ├── pipeline.py          # DiarizedTranscriber: diarize → match → Whisper
-│   ├── diarize.py           # pyannote Pipeline wrapper
-│   ├── embedding.py         # Voice embedding (Wespeaker)
-│   └── transcribe.py        # Faster-Whisper wrapper
+│   ├── config.py              # [Part I] Paths and model paths
+│   ├── pipeline.py            # [Part I] DiarizedTranscriber: diarize → match → Whisper
+│   ├── diarize.py             # [Part I] pyannote Pipeline wrapper
+│   ├── embedding.py           # [Part I] Voice embedding (Wespeaker)
+│   ├── transcribe.py          # [Part I] Faster-Whisper wrapper
+│   └── llm/                   # [Part II]
+│       ├── llm_client.py      # LLM client (DashScope-compatible)
+│       └── refine_pipeline.py # Refine pipeline: infer, merge, correct, split
+├── prompts/                   # [Part II] Prompt templates
+│   ├── refine.py              # Entry
+│   ├── infer_speaker.py       # Speaker inference (few-shot)
+│   └── correct_text.py        # Correction & punctuation (few-shot)
+├── routers/
+│   ├── audio.py               # [Part I] /embedding, /transcribe, /transcribe/stream, /ws/...
+│   └── llm/                   # [Part II] /refine
 ├── utils/
-│   ├── common.py            # Audio suffix, webm→wav, formatting
-│   └── errors.py            # HTTP error helpers
+│   ├── common.py
+│   └── errors.py
+├── config/
+│   └── llm_model.env          # [Part II] LLM API key etc.
 ├── scripts/test/
 │   ├── test_transcribe.py
 │   ├── test_transcribe_stream.py
-│   └── test_live_transcribe.py
+│   ├── test_live_transcribe.py
+│   └── test_refine.py         # [Part II] Refine pipeline (reads data/json/transcribe_output.json)
 ├── static/
-│   └── live.html            # Live transcription frontend
+│   └── live.html
 └── requirements.txt
 ```
 
@@ -304,12 +414,16 @@ pyannote_diarization/
 
 ```bash
 # With venv activated
+# Part I: Voice & Transcription
 python scripts/test/test_transcribe_stream.py   # Streaming
 python scripts/test/test_transcribe.py          # Batch
 python scripts/test/test_live_transcribe.py     # WebSocket Live
+
+# Part II: Refinement (requires config/llm_model.env)
+python scripts/test/test_refine.py              # Refine pipeline (data/json/transcribe_output.json → refined)
 ```
 
-Use `uvicorn app:app --reload` during development for auto-reload on code changes.
+Use `uvicorn app:app --reload` during development for auto-reload.
 
 ---
 
