@@ -5,14 +5,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 项目根（core/llm/llm_client.py -> 向上 2 层）
-_BASE_DIR = Path(__file__).resolve().parent.parent
-_ENV_PATH = _BASE_DIR / "config" / "llm_model.env"
+# _BASE_DIR = Path(__file__).resolve().parent.parent
+# _ENV_PATH = _BASE_DIR / "config" / "llm_model.env"
+_ENV_PATH = Path(r"../../config/llm_model.env")
 if _ENV_PATH.exists():
     load_dotenv(dotenv_path=_ENV_PATH)
 
 
 def get_llm(
-    model: str = "qwen3.5-plus",
+    model: str = "qwen-plus",
     api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
     streaming: bool = False,
 ):

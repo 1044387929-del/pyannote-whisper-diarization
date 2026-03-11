@@ -27,7 +27,7 @@ async def refine(body: dict):
     correct_text = body.get("correct_text", True)
     context_size = max(1, min(10, int(body.get("context_size", 3))))
     try:
-        result = run_pipeline(
+        result = await run_pipeline(
             utterances,
             infer_speakers=infer_speakers,
             merge=merge,

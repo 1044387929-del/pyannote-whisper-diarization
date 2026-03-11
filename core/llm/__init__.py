@@ -1,4 +1,4 @@
-"""LLM 相关：客户端、流水线"""
+"""LLM 相关：客户端、流水线（均为异步）"""
 from .llm_client import get_llm
 from .refine_pipeline import (
     infer_unknown_speakers,

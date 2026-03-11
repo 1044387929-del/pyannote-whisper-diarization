@@ -1,4 +1,5 @@
 """本地测试流水线：读 transcribe_output.json → 推断说话人 + 合并 + 纠错 → 保存"""
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -21,12 +22,15 @@ def main():
 
     from core.llm import run_pipeline
 
-    result = run_pipeline(
-        utterances,
-        infer_speakers=True,
-        merge=True,
-        correct_text=True,
-        context_size=3,
+    result = asyncio.run(
+        run_pipeline(
+            utterances,
+            infer_speakers=True,
+            merge=True,
+            correct_text=True,
+            context_size=3,
+            verbose=True,
+        )
     )
     print(f"输出条数: {len(result)}")
 
