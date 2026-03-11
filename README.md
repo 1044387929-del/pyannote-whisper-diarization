@@ -44,8 +44,8 @@
 |------|------|
 | **声纹 embedding** | 上传学号 + 姓名 + 音频，返回 256 维 embedding 向量，用于说话人注册 |
 | **批量转写** | 提交说话人列表（学号、姓名、embedding）+ 音频，返回带说话人标签的完整转写 JSON |
-| **流式转写** | 同上参数，通过 **Server-Sent Events (SSE)** 实时推送每句结果，附带进度与耗时统计 |
-| **Live 实时转写** | **WebSocket** 接收音频块，近似实时返回转写；`init` 时传入 `speakers` 则进行 diarization + 声纹匹配（分人），否则仅 Whisper 转写 |
+| **流式转写** | 同上参数，通过 **Server-Sent Events (SSE)** 实时推送每句结果；可选 `refine=true` 在流中做增量精修（纠错/标点/说话人推断），并先发 `type: "raw"` 再发 `type: "refined"` 便于对比 |
+| **Live 实时转写** | **WebSocket** 接收音频块，近似实时返回转写；`init` 可传 `speakers`（分人）与 `refine`（边录边精修）；开启 refine 时每块先发 `transcript_raw` 再发 `transcript`（精修后） |
 
 - 支持 WAV、MP3、WebM 等常见音频格式（依赖 pydub）。
 - 声纹匹配基于余弦相似度，可配置阈值。
@@ -104,8 +104,9 @@
 | **合并片段** | 同一说话人且上一句无句末标点时合并为一条，减少碎句 |
 | **纠错与标点** | 对每条文本调用 LLM 做错别字/同音词纠错与中文标点补全，多条并发 |
 | **按句拆分** | 按句末标点（。！？.!?）拆成「一句一 utterance」 |
-| **过滤无意义** | 删除空文本、纯语气词等 |
-| **兜底** | 保证输出无 `unknown`，未归属的归为默认说话人 |
+| **过滤无意义** | 删除空文本、纯语气词、占位符（如「无法识别的无意义字符，已删除」）等 |
+| **仅保留输入说话人** | 当提供 `allowed_speakers`（或流式/WebSocket 传入说话人列表）时，只保留该列表中的说话人，删除其余并保证输出无 `speaker_0`/`unknown` |
+| **兜底** | 未提供允许列表时，剩余 `unknown` 归为默认说话人 |
 
 ### 2.2 架构与数据流
 
@@ -166,7 +167,7 @@
 |------|------|
 | LLM | LangChain ChatOpenAI，兼容 DashScope（qwen 等），需 `config/llm_model.env` 配置 `DASHSCOPE_API_KEY` |
 | 提示词 | `prompts/infer_speaker.py`（推断说话人）、`prompts/correct_text.py`（纠错标点），Few-shot 为 HumanMessage/AIMessage 形式 |
-| 流水线 | `core/llm/refine_pipeline.py`：`run_pipeline()` 为异步入口，支持 `infer_speakers`、`merge`、`correct_text`、`filter_meaningless` 等开关 |
+| 流水线 | `core/llm/refine_pipeline.py`：`run_pipeline()` 为异步入口，支持 `infer_speakers`、`merge`、`correct_text`、`filter_meaningless`、`allowed_speakers_from_input`（只保留指定说话人）等；流式/WebSocket 增量精修时支持 `previous_context`（上文）供说话人推断 |
 
 ---
 
@@ -310,33 +311,50 @@ curl http://127.0.0.1:8001/health
 
 #### POST /transcriptions/stream
 
-参数与 `POST /transcriptions` 相同，响应为 **SSE 流**：每完成一句推送一条 `data:` 行（JSON 对象），最后推送一条 `status: "done"` 的汇总（含 `diarization_seconds`、`whisper_seconds` 等）。
+参数与 `POST /transcriptions` 相同，另支持可选表单项：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| refine | bool | 否 | 默认 false；为 true 时在流中做增量精修（纠错/标点/说话人推断等），且仅保留请求中说话人列表里的说话人 |
+
+响应为 **SSE 流**：每完成一句推送一条或若干条 `data:` 行（JSON 对象），最后推送一条 `status: "done"` 的汇总。
+
+- **不精修**：每句一条 `data:`，字段含 `start`、`end`、`speaker`、`student_id`、`text` 等。
+- **精修时**：每句先发一条 `"type": "raw"`（修正前），再发一条或若干条 `"type": "refined"`（修正后，可能一句拆成多条）。
 
 **事件示例**：
 
 ```
-data: {"start": 3.0, "end": 3.6, "speaker": "peppa", "student_id": "2021001", "text": "我是佩奇", "index": 1, "total": 111, "progress": 0.9}
-data: {"status": "done", "total": 111, "progress": 100, "diarization_seconds": 12.34, "whisper_seconds": 89.56}
+data: {"start": 3.0, "end": 3.6, "speaker": "peppa", "student_id": "2021001", "text": "我是佩奇"}
+data: {"status": "done", "diarization_seconds": 12.34, "whisper_seconds": 89.56}
+```
+
+精修时每句示例：
+
+```
+data: {"type": "raw", "start": 3.0, "end": 3.6, "speaker": "peppa", "text": "我是佩奇"}
+data: {"type": "refined", "start": 3.0, "end": 3.6, "speaker": "peppa", "text": "我是佩奇。"}
 ```
 
 ---
 
 #### WebSocket /ws/transcriptions/live
 
-实时转写：客户端发送音频块，服务端返回该块的转写结果。若在 `init` 中传入 `speakers`，则对该块做 diarization + 声纹匹配；否则仅做 Whisper 转写。
+实时转写：客户端发送音频块，服务端返回该块的转写结果。若在 `init` 中传入 `speakers`，则对该块做 diarization + 声纹匹配；否则仅做 Whisper 转写。可选 `refine: true` 开启边录边精修（每块先发原始再发精修后结果）。
 
 **消息类型**：
 
 | 方向 | type | 说明 |
 |------|------|------|
-| 客户端 → | `init` | `{ "type": "init", "language": "zh", "speakers": [{"student_id","name","embedding"}, ...] }`，speakers 可选 |
-| 服务端 ← | `ready` | `{ "type": "ready", "language": "zh", "has_speakers": true/false }` |
+| 客户端 → | `init` | `{ "type": "init", "language": "zh", "speakers": [...], "refine": false }`，speakers、refine 可选 |
+| 服务端 ← | `ready` | `{ "type": "ready", "language": "zh", "has_speakers": true/false, "refine": false }` |
 | 客户端 → | `audio` | `{ "type": "audio", "data": "<base64 编码的 WAV>", "chunk_index": 1 }` |
-| 服务端 ← | `transcript` | `{ "type": "transcript", "utterances": [...], "text": "...", "chunk_index": 1 }` |
+| 服务端 ← | `transcript_raw` | 仅当 refine 时发送：`{ "type": "transcript_raw", "utterances": [...], "text": "...", "chunk_index": 1 }`（修正前） |
+| 服务端 ← | `transcript` | `{ "type": "transcript", "utterances": [...], "text": "...", "chunk_index": 1 }`（精修时为修正后） |
 | 客户端 → | `end` | `{ "type": "end" }` |
 | 服务端 ← | `done` | `{ "type": "done", "total_chunks": N }` |
 
-建议音频块为 WAV，每块 5–15 秒。
+建议音频块为 WAV，每块 5–15 秒。开启 refine 时每块会先收 `transcript_raw` 再收 `transcript`，客户端可对比处理前后。
 
 ---
 
@@ -353,6 +371,7 @@ data: {"status": "done", "total": 111, "progress": 100, "diarization_seconds": 1
 | merge | bool | 否 | 是否合并同人同句碎片，默认 true |
 | correct_text | bool | 否 | 是否纠错与标点，默认 true |
 | context_size | int | 否 | 推断说话人时的上下文句数，默认 3 |
+| allowed_speakers | array | 否 | 若提供，精修后只保留该列表中的说话人（每项含 `speaker`、`student_id`），输出无 `speaker_0`/`unknown`，不在列表中的发言会被删除 |
 
 **响应** `200 OK`：
 
@@ -364,7 +383,7 @@ data: {"status": "done", "total": 111, "progress": 100, "diarization_seconds": 1
 }
 ```
 
-精修后保证每条 utterance 均有说话人归属（无 `unknown`），且按句末标点拆成「一句一条」。
+精修后按句末标点拆成「一句一条」；若传了 `allowed_speakers`，则输出仅含这些说话人且无 `speaker_0`/`unknown`。
 
 ---
 
@@ -417,15 +436,18 @@ pyannote_diarization/
 ## 开发与测试
 
 ```bash
-# 激活虚拟环境后
+# 激活虚拟环境后，在项目根目录执行
 # 一、声纹与转写
-python scripts/test/test_transcribe_stream.py   # 流式转写
+python scripts/test/test_transcribe_stream.py   # 流式转写（脚本内 REFINE=True 可开边转写边精修）
 python scripts/test/test_transcribe.py         # 批量转写
-python scripts/test/test_live_transcribe.py    # WebSocket Live
+python scripts/test/test_live_transcribe.py    # WebSocket Live（脚本内 REFINE=True 可开边录边精修，并打印修正前/修正后）
 
 # 二、转写精修（需配置 config/llm_model.env）
 python scripts/test/test_refine.py              # 精修流水线（读 data/json/transcribe_output.json → 输出 refined）
+python scripts/test/test_refine_api.py          # POST /refinements 接口测试（可传 allowed_speakers）
 ```
+
+测试脚本的音频/说话人路径与是否精修等可在各脚本顶部常量中修改（如 `REFINE`、`AUDIO_PATH`、`SPEAKERS_JSON`）。
 
 开发时推荐使用 `uvicorn app:app --reload` 以便代码变更自动重载。
 

@@ -36,6 +36,7 @@ async def websocket_transcriptions_live(websocket: WebSocket):
     - 客户端 -> init: {"type": "init", "language": "zh", "speakers": [...], "refine": false}
     - 服务端 -> ready: {"type": "ready", "language": "zh", "has_speakers": true, "refine": false}
     - 客户端 -> audio: {"type": "audio", "data": "<base64>", "chunk_index": 1}
+    - 服务端（refine 时先发）-> transcript_raw: {"type": "transcript_raw", "utterances": [...], "text": "...", "chunk_index": 1}
     - 服务端 -> transcript: {"type": "transcript", "utterances": [...], "text": "...", "chunk_index": 1}
     - 客户端 -> end: {"type": "end"}
     - 服务端 -> done: {"type": "done", "total_chunks": N}
@@ -154,6 +155,12 @@ async def websocket_transcriptions_live(websocket: WebSocket):
                     continue
                 chunk_count += 1
                 if refine and pipeline and utterances:
+                    await websocket.send_json({
+                        "type": "transcript_raw",
+                        "utterances": utterances,
+                        "text": text,
+                        "chunk_index": chunk_index,
+                    })
                     batch = await pipeline.run_incremental(
                         refined_so_far, utterances, allowed_speakers_from_input=allowed_speakers_from_input
                     )

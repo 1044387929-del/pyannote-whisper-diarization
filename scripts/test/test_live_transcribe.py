@@ -97,13 +97,14 @@ async def main():
         for i, chunk in enumerate(chunks):
             data_b64 = base64.b64encode(chunk).decode()
             await ws.send(json.dumps({"type": "audio", "data": data_b64, "chunk_index": i + 1}))
-            resp = json.loads(await ws.recv())
-            if resp.get("type") == "transcript":
-                utterances = resp.get("utterances") or []
-                idx = resp.get("chunk_index", i + 1)
-                if utterances:
-                    chunk_offset = (idx - 1) * CHUNK_SECONDS
-                    for u in utterances:
+            chunk_offset = i * CHUNK_SECONDS
+
+            def print_utterances(msg_type_label, resp_msg):
+                utts = resp_msg.get("utterances") or []
+                idx = resp_msg.get("chunk_index", i + 1)
+                prefix = f"[客户端] {msg_type_label} " if msg_type_label else "[客户端] "
+                if utts:
+                    for u in utts:
                         speaker = u.get("speaker", "?")
                         text = (u.get("text") or "").strip()
                         t0, t1 = u.get("start", 0), u.get("end", 0)
@@ -111,13 +112,27 @@ async def main():
                         abs_t1 = chunk_offset + t1
                         ts = f"{secs_to_hms(abs_t0)} - {secs_to_hms(abs_t1)}"
                         if text:
-                            print(f"[客户端] 第 {idx} 块 | {ts} | {speaker}: {text}")
+                            print(f"{prefix}第 {idx} 块 | {ts} | {speaker}: {text}")
                 else:
-                    text = (resp.get("text") or "").strip()
+                    text = (resp_msg.get("text") or "").strip()
                     if text:
-                        print(f"[客户端] 第 {idx} 块: {text}")
-            elif resp.get("type") == "error":
-                print(f"[客户端] 错误: {resp.get('message')}")
+                        print(f"{prefix}第 {idx} 块: {text}")
+
+            while True:
+                resp = json.loads(await ws.recv())
+                if resp.get("type") == "transcript_raw":
+                    print_utterances("修正前", resp)
+                    continue
+                if resp.get("type") == "transcript":
+                    if REFINE:
+                        print_utterances("修正后", resp)
+                    else:
+                        print_utterances("", resp)
+                    break
+                if resp.get("type") == "error":
+                    print(f"[客户端] 错误: {resp.get('message')}")
+                    break
+            if resp.get("type") == "error":
                 break
 
         # end
