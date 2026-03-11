@@ -1,4 +1,4 @@
-"""测试 WebSocket /ws/live-transcribe 实时转写接口。先启动 uvicorn，再运行本脚本。"""
+"""测试 WebSocket /ws/transcriptions/live 实时转写接口。先启动 uvicorn，再运行本脚本。"""
 import asyncio
 import base64
 import json
@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
+from utils.common import secs_to_hms
 
 try:
     import websockets
@@ -19,19 +20,22 @@ try:
 except ImportError:
     torchaudio = None
 
-AUDIO_PATH = Path(r"/root/autodl-tmp/django_hmxy/pyannote_diarization/data/audio/audio_all.wav")
-SPEAKERS_JSON = Path(r"/root/autodl-tmp/django_hmxy/pyannote_diarization/data/json/speakers_embedding.json")
-URL = "ws://127.0.0.1:8001/ws/transcriptions/live"
+# 脚本内参数（按需修改）
+REFINE = True  # True：边录边修正（纠错/标点/说话人推断等）
+AUDIO_PATH = ROOT / r"data/audio/audio_all.wav"
+SPEAKERS_JSON = ROOT / r"data/json/speakers_embedding.json"
+URL = r"ws://127.0.0.1:8001/ws/transcriptions/live"
+# 音频切分时间，单位：秒
 CHUNK_SECONDS = 10
 
 
-def secs_to_hms(secs: float) -> str:
-    """秒数转为 小时:分钟:秒.毫秒"""
-    h = int(secs // 3600)
-    m = int((secs % 3600) // 60)
-    s = int(secs % 60)
-    ms = int((secs % 1) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+# def secs_to_hms(secs: float) -> str:
+#     """秒数转为 小时:分钟:秒.毫秒"""
+#     h = int(secs // 3600)
+#     m = int((secs % 3600) // 60)
+#     s = int(secs % 60)
+#     ms = int((secs % 1) * 1000)
+#     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
 def split_audio_into_chunks(audio_path: Path, chunk_seconds: float = 10) -> list[bytes]:
@@ -73,19 +77,19 @@ async def main():
     else:
         print("[客户端] 未找到 speakers_embedding.json，将仅转写不分人")
 
-    print(f"[客户端] 连接 ws://127.0.0.1:8001/ws/transcriptions/live")
-    print(f"[客户端] 音频 {AUDIO_PATH.name} 切分为 {len(chunks)} 块")
+    print(f"[客户端] 连接 {URL}")
+    print(f"[客户端] 音频 {AUDIO_PATH.name} 切分为 {len(chunks)} 块" + (" | refine=true" if REFINE else ""))
     print("-" * 50)
 
     async with websockets.connect(URL) as ws:
         # init
-        init_msg = {"type": "init", "language": "zh"}
+        init_msg = {"type": "init", "language": "zh", "refine": REFINE}
         if speakers:
             init_msg["speakers"] = speakers
         await ws.send(json.dumps(init_msg))
         resp = json.loads(await ws.recv())
         if resp.get("type") == "ready":
-            print(f"[客户端] 连接就绪 | has_speakers={resp.get('has_speakers', False)}")
+            print(f"[客户端] 连接就绪 | has_speakers={resp.get('has_speakers', False)} | refine={resp.get('refine', False)}")
         else:
             print(f"[客户端] 意外: {resp}")
             return

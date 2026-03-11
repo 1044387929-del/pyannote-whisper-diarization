@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
 
 # 项目根（core/llm/llm_client.py -> 向上 2 层），避免依赖 cwd
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -15,8 +16,7 @@ def get_llm(
     model: str = "qwen-plus",
     api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
     streaming: bool = False,
-):
-    from langchain_openai import ChatOpenAI
+) -> ChatOpenAI:
     api_key = os.getenv("DASHSCOPE_API_KEY")
     if not api_key:
         raise ValueError("未设置 DASHSCOPE_API_KEY，请在 config/llm_model.env 中配置")

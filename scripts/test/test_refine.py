@@ -28,7 +28,7 @@ def main():
             infer_speakers=True,
             merge=True,
             correct_text=True,
-            context_size=3,
+            context_size=5,
             verbose=True,
         )
     )

@@ -69,10 +69,14 @@ async def infer_unknown_speakers(
     original: List[dict],
     llm,
     allowed_speakers: List[dict],
-    context_size: int = 3,
+    context_size: int = 5,
     verbose: bool = True,
+    previous_context: Optional[List[dict]] = None,
 ) -> List[dict]:
-    """推断 unknown 说话人。仅对 speaker 为 unknown 的条目调用 LLM，已有归属的不猜。"""
+    """推断 unknown 说话人。仅对 speaker 为 unknown 的条目调用 LLM，已有归属的不猜。
+    previous_context：流式场景下已精修的上文，用于拼在 context 前供推断参考。
+    p
+    """
     from prompts.refine import infer_speaker_prompt
 
     if not allowed_speakers:
@@ -97,9 +101,17 @@ async def infer_unknown_speakers(
             u["speaker"] = allowed_speakers[0]["speaker"]
             u["student_id"] = allowed_speakers[0]["student_id"]
             continue
+        context_parts = []
+        if previous_context:
+            prev_tail = previous_context[-context_size:] if len(previous_context) > context_size else previous_context
+            for row in prev_tail:
+                t = (row.get("text") or "").strip()
+                if not t:
+                    continue
+                label = row.get("speaker", "?")
+                context_parts.append(f"{label}: {t}")
         start = max(0, i - context_size)
         end = min(n, i + context_size + 1)
-        context_parts = []
         for j in range(start, end):
             if j < i:
                 row = out[j]
@@ -272,10 +284,15 @@ def split_utterances_by_sentence(utterances: List[dict], verbose: bool = True) -
 
 # 视为无意义并删除：空、纯空白、或仅语气词/极短
 _MEANINGLESS = frozenset({"嗯", "啊", "哦", "呃", "唉", "咳", "呵", "哈", "诶", "噢", "唔", "欸", "..."})
+# 纠错/占位输出，视为无意义并删除
+_MEANINGLESS_PLACEHOLDERS = frozenset({
+    "（无法识别的无意义字符，已删除）",
+    "(无法识别的无意义字符，已删除)",
+})
 
 
 def filter_empty_and_meaningless(utterances: List[dict], verbose: bool = True) -> List[dict]:
-    """删除空文本及无意义短句（如纯语气词）。"""
+    """删除空文本及无意义短句（如纯语气词、占位符）。"""
     out = []
     dropped = 0
     for u in utterances:
@@ -283,12 +300,54 @@ def filter_empty_and_meaningless(utterances: List[dict], verbose: bool = True) -
         if not text:
             dropped += 1
             continue
-        if text in _MEANINGLESS or (len(text) <= 1 and not text.isalnum()):
+        if text in _MEANINGLESS or text in _MEANINGLESS_PLACEHOLDERS:
+            dropped += 1
+            continue
+        if len(text) <= 1 and not text.isalnum():
             dropped += 1
             continue
         out.append(u)
     if verbose and dropped:
         print(f"[4/4] 删除空/无意义发言: {dropped} 条，剩余 {len(out)} 条")
+    return out
+
+
+def _filter_to_allowed_speakers_only(
+    utterances: List[dict],
+    allowed_speakers_from_input: List[dict],
+    verbose: bool = True,
+) -> List[dict]:
+    """
+    只保留「输入参数中的说话人」：发言的 speaker 或 student_id 不在允许列表中则删除；
+    仍为 speaker_0/unknown 的发言归为允许列表第一个，保证输出无 speaker_0/unknown。
+    allowed_speakers_from_input 每项需有 speaker、student_id（与 infer 一致）。
+    """
+    if not allowed_speakers_from_input:
+        return utterances
+    # 允许列表：每个输入说话人的 speaker 与 student_id 均视为合法
+    allowed_identities = set()
+    for a in allowed_speakers_from_input:
+        s = _normalize_speaker(a.get("speaker"))
+        sid = (a.get("student_id") or "").strip().lower()
+        if s and s not in ("unknown", DEFAULT_SPEAKER):
+            allowed_identities.add(s)
+        if sid:
+            allowed_identities.add(sid)
+    first = allowed_speakers_from_input[0]
+    out = []
+    dropped = 0
+    for u in utterances:
+        s = _normalize_speaker(u.get("speaker"))
+        sid = (u.get("student_id") or "").strip().lower()
+        in_allowed = (s in allowed_identities) or (sid in allowed_identities)
+        if not in_allowed and s not in ("unknown", DEFAULT_SPEAKER):
+            dropped += 1
+            continue
+        if s == "unknown" or s == DEFAULT_SPEAKER:
+            u = {**u, "speaker": first.get("speaker"), "student_id": first.get("student_id")}
+        out.append(u)
+    if verbose and dropped:
+        print(f"[仅保留输入说话人] 删除 {dropped} 条，剩余 {len(out)} 条")
     return out
 
 
@@ -322,31 +381,35 @@ class RefinePipeline:
         self.verbose = verbose
         self.correct_max_concurrent = correct_max_concurrent
 
-    async def run(self, utterances: List[dict]) -> List[dict]:
-        """执行精修流水线，返回精修后的 utterance 列表。"""
+    async def run(
+        self,
+        utterances: List[dict],
+        allowed_speakers_from_input: Optional[List[dict]] = None,
+        previous_context: Optional[List[dict]] = None,
+    ) -> List[dict]:
+        """执行精修流水线，返回精修后的 utterance 列表。
+        若提供 allowed_speakers_from_input，则仅保留该列表中的说话人，无 speaker_0/unknown。
+        previous_context：流式场景下已精修的上文，用于说话人推断时的上文语境。
+        """
         if not utterances:
             return []
-        # 深拷贝原始列表
         original = copy.deepcopy(utterances)
-        # 深拷贝原始列表
         out = copy.deepcopy(utterances)
-        # 获取允许的说话人列表
-        allowed_speakers = _get_allowed_speakers(original)
+        allowed_speakers = (
+            allowed_speakers_from_input
+            if allowed_speakers_from_input
+            else _get_allowed_speakers(original)
+        )
 
-        # 如果需要推断说话人，并且有 unknown 说话人，则推断说话人
         if self.infer_speakers and _has_unknown_speaker(out):
-            # 推断说话人
             out = await infer_unknown_speakers(
                 out, original, self.llm, allowed_speakers,
                 context_size=self.context_size, verbose=self.verbose,
+                previous_context=previous_context,
             )
-        # 如果需要合并片段，则合并片段
         if self.merge:
-            # 合并片段
             out = merge_fragments(out, verbose=self.verbose)
-        # 如果需要纠错文本，则纠错文本
         if self.correct_text:
-            # 纠错文本
             out = await correct_utterance_texts(
                 out, self.llm, verbose=self.verbose,
                 max_concurrent=self.correct_max_concurrent,
@@ -355,7 +418,29 @@ class RefinePipeline:
         if self.filter_meaningless:
             out = filter_empty_and_meaningless(out, verbose=self.verbose)
         out = _force_no_unknown(out, verbose=self.verbose)
+        if allowed_speakers_from_input:
+            out = _filter_to_allowed_speakers_only(
+                out, allowed_speakers_from_input, verbose=self.verbose
+            )
         return out
+
+    async def run_incremental(
+        self,
+        previous_refined: List[dict],
+        new_utterances: List[dict],
+        allowed_speakers_from_input: Optional[List[dict]] = None,
+    ) -> List[dict]:
+        """
+        增量精修：仅对 new_utterances 跑流水线，不与 previous_refined 做跨段合并。
+        若提供 allowed_speakers_from_input，则只返回输入参数中的说话人，无 speaker_0/unknown。
+        """
+        if not new_utterances:
+            return []
+        return await self.run(
+            copy.deepcopy(new_utterances),
+            allowed_speakers_from_input=allowed_speakers_from_input,
+            previous_context=previous_refined if previous_refined else None,
+        )
 
 
 async def run_pipeline(
@@ -368,8 +453,9 @@ async def run_pipeline(
     context_size: int = 3,
     verbose: bool = False,
     correct_max_concurrent: int = 10,
+    allowed_speakers_from_input: Optional[List[dict]] = None,
 ) -> List[dict]:
-    """兼容入口：构造 RefinePipeline 并执行 run。保留原有函数式调用方式。"""
+    """兼容入口：构造 RefinePipeline 并执行 run。若提供 allowed_speakers_from_input 则只保留该列表中的说话人。"""
     pipeline = RefinePipeline(
         llm=llm,
         infer_speakers=infer_speakers,
@@ -380,7 +466,7 @@ async def run_pipeline(
         verbose=verbose,
         correct_max_concurrent=correct_max_concurrent,
     )
-    return await pipeline.run(utterances)
+    return await pipeline.run(utterances, allowed_speakers_from_input=allowed_speakers_from_input)
 
 
 def _force_no_unknown(utterances: List[dict], verbose: bool = True) -> List[dict]:

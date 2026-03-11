@@ -52,6 +52,10 @@
         语言：
         <input type="text" id="lang" value="zh" placeholder="zh / en / 空" style="width: 80px;">
       </label>
+      <label>
+        <input type="checkbox" id="refine" title="每块转写后做纠错/标点/说话人推断等精修">
+        边录边修正
+      </label>
       <button id="startBtn" class="btn btn-primary">开始录音</button>
       <button id="stopBtn" class="btn btn-danger" disabled>停止录音</button>
     </div>
@@ -71,6 +75,7 @@
     wsUrlEl.value = `${proto}//${host}:8001/ws/transcriptions/live`;
     const chunkSecsEl = document.getElementById('chunkSecs');
     const langEl = document.getElementById('lang');
+    const refineEl = document.getElementById('refine');
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const statusEl = document.getElementById('status');
@@ -249,7 +254,8 @@
       }
 
       ws.onopen = () => {
-        const init = { type: 'init', language: lang || 'zh' };
+        const lang = (langEl && langEl.value) ? langEl.value.trim() : 'zh';
+        const init = { type: 'init', language: lang || 'zh', refine: !!(refineEl && refineEl.checked) };
         ws.send(JSON.stringify(init));
       };
 

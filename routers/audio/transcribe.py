@@ -3,12 +3,13 @@ import asyncio
 import json
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import AsyncGenerator, List
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from core.audio import transcribe_with_speakers, transcribe_with_speakers_stream
+from core.llm.refine_pipeline import RefinePipeline
 from utils.common import ALLOWED_EXT, get_audio_suffix, secs_to_hms
 from utils.errors import (
     ERR_AUDIO_EMPTY,
@@ -22,8 +23,10 @@ from utils.errors import (
 router = APIRouter(tags=["transcribe"])
 
 
-async def _stream_transcribe_events(tmp_path: str, speakers_list: list, lang: str | None):
-    """SSE 流式生成：每完成一句转写就 yield 一个 data 事件。"""
+async def _stream_transcribe_events(
+    tmp_path: str, speakers_list: list, lang: str | None, refine: bool = False
+) -> AsyncGenerator[str, None]:
+    """SSE 流式生成：每完成一句转写就 yield 一个 data 事件；refine=True 时在流中做增量精修后推送。"""
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
@@ -38,6 +41,12 @@ async def _stream_transcribe_events(tmp_path: str, speakers_list: list, lang: st
 
     loop.run_in_executor(None, run)
 
+    pipeline = RefinePipeline(verbose=False) if refine else None
+    allowed_speakers_from_input = (
+        [{"speaker": s.get("name") or s.get("student_id"), "student_id": s.get("student_id")} for s in speakers_list]
+    )
+    allowed_speakers_from_input = list(allowed_speakers_from_input) if speakers_list else None
+    refined_so_far: list = []
     count = 0
     try:
         while True:
@@ -50,6 +59,7 @@ async def _stream_transcribe_events(tmp_path: str, speakers_list: list, lang: st
                 d = item.get("diarization_seconds", 0)
                 w = item.get("whisper_seconds", 0)
                 print(f"[服务端] 流式转录完成 | pyannote: {d}s, Whisper: {w}s")
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
             else:
                 count += 1
                 t0, t1 = item.get("start", 0), item.get("end", 0)
@@ -58,7 +68,18 @@ async def _stream_transcribe_events(tmp_path: str, speakers_list: list, lang: st
                 preview = (text[:30] + "..") if len(text) > 30 else text
                 ts = f"{secs_to_hms(t0)} - {secs_to_hms(t1)}"
                 print(f"[服务端] 进度 第 {count} 句 | {ts} | {speaker}: {preview}")
-            yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                if refine and pipeline:
+                    raw_event = {**item, "type": "raw"}
+                    yield f"data: {json.dumps(raw_event, ensure_ascii=False)}\n\n"
+                    batch = await pipeline.run_incremental(
+                        refined_so_far, [item], allowed_speakers_from_input=allowed_speakers_from_input
+                    )
+                    refined_so_far.extend(batch)
+                    for r in batch:
+                        refined_event = {**r, "type": "refined"}
+                        yield f"data: {json.dumps(refined_event, ensure_ascii=False)}\n\n"
+                else:
+                    yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
     finally:
         Path(tmp_path).unlink(missing_ok=True)
         print(f"[服务端] 流式转录结束 | 共 {count} 句")
@@ -71,7 +92,7 @@ async def create_transcription(
     embedding: List[str] = Form(..., description="256 维向量 JSON 字符串，如 [0.1,-0.2,...]"),
     audio: UploadFile = File(..., description="待转写音频"),
     language: str = Form("", description="Whisper 语言，如 zh、en，空则自动检测"),
-):
+) -> dict:
     """
     提交若干个（学号、姓名、向量）三元组 + 待测音频，返回转录 JSON。
     三元组用重复的 form 字段传递，三列按索引一一对应。
@@ -132,9 +153,11 @@ async def create_transcription_stream(
     embedding: List[str] = Form(..., description="256 维向量 JSON 字符串，如 [0.1,-0.2,...]"),
     audio: UploadFile = File(..., description="待转写音频"),
     language: str = Form("", description="Whisper 语言，如 zh、en，空则自动检测"),
-):
+    refine: bool = Form(False, description="是否在流中同时做精修（纠错/标点/说话人推断等）"),
+) -> StreamingResponse:
     """
     流式转录：参数与 POST /transcriptions 相同，每完成一句即通过 SSE 推送，无需等待全部完成。
+    refine=true 时，每句转写后先做增量精修再推送精修结果。
 
     curl 示例（SSE 流式接收）:
       curl -N -X POST http://127.0.0.1:8001/transcriptions/stream \\
@@ -142,6 +165,7 @@ async def create_transcription_stream(
         -F "name=张三" -F "name=李四" \\
         -F "embedding=[-0.13,0.12,...]" -F "embedding=[0.2,-0.1,...]" \\
         -F "audio=@audio.wav" -F "language=zh"
+    带精修: 同上并加 -F "refine=true"
     """
     suf = Path(audio.filename or "").suffix.lower()
     if suf and suf not in ALLOWED_EXT:
@@ -170,10 +194,10 @@ async def create_transcription_stream(
         f.write(content)
         tmp_path = f.name
 
-    print(f"[服务端] 流式转录请求开始 | 说话人数: {n} | 音频: {audio.filename}")
+    print(f"[服务端] 流式转录请求开始 | 说话人数: {n} | 音频: {audio.filename} | refine={refine}")
     lang = language.strip() or None
     return StreamingResponse(
-        _stream_transcribe_events(tmp_path, speakers_list, lang),
+        _stream_transcribe_events(tmp_path, speakers_list, lang, refine=refine),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
