@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from typing import List
 
-from fastapi import File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from core.pipeline import transcribe_with_speakers, transcribe_with_speakers_stream
@@ -18,7 +18,6 @@ from utils.errors import (
     err_transcribe,
     err_unsupported_format,
 )
-from fastapi import APIRouter
 
 router = APIRouter(tags=["transcribe"])
 

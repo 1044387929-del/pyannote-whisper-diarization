@@ -10,12 +10,13 @@ from fastapi.websockets import WebSocket, WebSocketDisconnect
 
 from core.pipeline import transcribe_chunk_with_speakers
 from core.transcribe import transcribe_chunk
-from utils.errors import ws_error
 from utils.common import webm_to_wav
+from utils.errors import ws_error
 
 router = APIRouter(tags=["live"])
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+# 项目根目录的 static（routers/audio/live.py -> 根目录）
+STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 
 @router.get("/live")

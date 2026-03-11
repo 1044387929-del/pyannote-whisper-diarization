@@ -14,7 +14,7 @@ pipeline:
     segmentation_batch_size: 32
     # 本地 PLDA，避免访问 HuggingFace（plda 目录内需有 xvec_transform.npz 和 plda.npz）
     plda:
-      checkpoint: /root/autodl-tmp/django_hmxy/pyannote_diarization/plda
+      checkpoint: ./plda
 
 params:
   clustering:

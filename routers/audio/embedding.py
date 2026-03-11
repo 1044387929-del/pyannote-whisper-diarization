@@ -12,7 +12,6 @@ router = APIRouter(tags=["embedding"])
 
 
 @router.post("/embedding")
-# 采用异步是因为可能需要读取文件，如果使用同步，则会导致阻塞
 async def upload_audio_embedding(
     student_id: str = Form(..., description="学号"),
     name: str = Form("", description="姓名（可选）"),
