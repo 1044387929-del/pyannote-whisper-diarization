@@ -2,10 +2,11 @@
 import asyncio
 import json
 import tempfile
+import threading
 from pathlib import Path
 from typing import AsyncGenerator, List
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from core.audio import transcribe_with_speakers, transcribe_with_speakers_stream
@@ -85,8 +86,21 @@ async def _stream_transcribe_events(
         print(f"[服务端] 流式转录结束 | 共 {count} 句")
 
 
+async def _wait_client_disconnect(request: Request, cancelled: threading.Event) -> None:
+    """客户端（如 Django 代理）断开连接时设置 cancelled，便于转录循环提前退出。"""
+    try:
+        message = await request.receive()
+        if message.get("type") == "http.disconnect":
+            cancelled.set()
+            print("[服务端] 取消转录：收到客户端断开连接，已中止本次转录任务")
+    except Exception as e:
+        print(f"[服务端] 取消转录：监听连接时异常，已中止 | {e}")
+        cancelled.set()
+
+
 @router.post("/transcriptions")
 async def create_transcription(
+    request: Request,
     student_id: List[str] = Form(..., description="学号，可多个，按顺序与 name、embedding 对应"),
     name: List[str] = Form(..., description="姓名，可多个"),
     embedding: List[str] = Form(..., description="256 维向量 JSON 字符串，如 [0.1,-0.2,...]"),
@@ -131,18 +145,29 @@ async def create_transcription(
         f.write(content)
         tmp_path = f.name
 
+    cancelled = threading.Event()
+    disconnect_task = asyncio.create_task(_wait_client_disconnect(request, cancelled))
     try:
         lang = language.strip() or None
         print(f"[服务端] /transcriptions 转录开始 | 说话人数: {n} | 音频: {audio.filename}")
         loop = asyncio.get_event_loop()
         utterances = await loop.run_in_executor(
-            None, lambda: transcribe_with_speakers(tmp_path, speakers_list, language=lang)
+            None,
+            lambda: transcribe_with_speakers(tmp_path, speakers_list, language=lang, cancelled=cancelled),
         )
-        print(f"[服务端] /transcriptions 转录完成 | 共 {len(utterances)} 句")
+        if cancelled.is_set():
+            print("[服务端] 取消转录：/transcriptions 任务已提前结束（客户端已断开）")
+        else:
+            print(f"[服务端] /transcriptions 转录完成 | 共 {len(utterances)} 句")
         return {"utterances": utterances}
     except Exception as e:
         raise HTTPException(**err_transcribe(e))
     finally:
+        disconnect_task.cancel()
+        try:
+            await disconnect_task
+        except asyncio.CancelledError:
+            pass
         Path(tmp_path).unlink(missing_ok=True)
 
 

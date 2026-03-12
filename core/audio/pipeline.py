@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator
+
+CancelledT = threading.Event | None
 
 import numpy as np
 import torch
@@ -48,26 +51,36 @@ class DiarizedTranscriber:
         self._embedding = EmbeddingExtractor()
         self._whisper = WhisperTranscriber()
 
-    def transcribe(self, audio_path: str | Path, speakers: list[dict]) -> list[Utterance]:
+    def transcribe(
+        self, audio_path: str | Path, speakers: list[dict], cancelled: CancelledT = None
+    ) -> list[Utterance]:
         audio_path = Path(audio_path)
         registry = SpeakerRegistry.from_speakers_list(speakers)
         anno = self._diarize.diarize(audio_path)
+        if cancelled and cancelled.is_set():
+            return []
         waveform, sample_rate = torchaudio.load(str(audio_path))
         utterances: list[Utterance] = []
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             for turn, _, _ in anno.itertracks(yield_label=True):
+                if cancelled and cancelled.is_set():
+                    break
                 t_start, t_end = turn.start, turn.end
                 speaker, student_id = self._match_speaker(turn, waveform, sample_rate, registry)
                 text = self._transcribe_segment(turn, waveform, sample_rate, tmpdir)
                 utterances.append(Utterance(start=t_start, end=t_end, speaker=speaker, student_id=student_id, text=text))
         return utterances
 
-    def transcribe_stream(self, audio_path: str | Path, speakers: list[dict]) -> Generator[dict, None, None]:
+    def transcribe_stream(
+        self, audio_path: str | Path, speakers: list[dict], cancelled: CancelledT = None
+    ) -> Generator[dict, None, None]:
         audio_path = Path(audio_path)
         registry = SpeakerRegistry.from_speakers_list(speakers)
         t0_d = time.perf_counter()
         anno = self._diarize.diarize(audio_path)
+        if cancelled and cancelled.is_set():
+            return
         diarization_seconds = round(time.perf_counter() - t0_d, 2)
         waveform, sample_rate = torchaudio.load(str(audio_path))
         turns = list(anno.itertracks(yield_label=True))
@@ -76,6 +89,8 @@ class DiarizedTranscriber:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             for idx, (turn, _, _) in enumerate(turns):
+                if cancelled and cancelled.is_set():
+                    return
                 t_start, t_end = turn.start, turn.end
                 speaker, student_id = self._match_speaker(turn, waveform, sample_rate, registry)
                 t0_w = time.perf_counter()
@@ -116,9 +131,10 @@ def transcribe_with_speakers(
     speakers: list[dict],
     language: str | None = None,
     match_threshold: float = 0.5,
+    cancelled: CancelledT = None,
 ) -> list[dict]:
     transcriber = DiarizedTranscriber(language=language, match_threshold=match_threshold)
-    return [u.to_dict() for u in transcriber.transcribe(audio_path, speakers)]
+    return [u.to_dict() for u in transcriber.transcribe(audio_path, speakers, cancelled=cancelled)]
 
 
 def transcribe_chunk_with_speakers(
@@ -141,6 +157,7 @@ def transcribe_with_speakers_stream(
     speakers: list[dict],
     language: str | None = None,
     match_threshold: float = 0.5,
+    cancelled: CancelledT = None,
 ):
     transcriber = DiarizedTranscriber(language=language, match_threshold=match_threshold)
-    yield from transcriber.transcribe_stream(audio_path, speakers)
+    yield from transcriber.transcribe_stream(audio_path, speakers, cancelled=cancelled)
