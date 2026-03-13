@@ -10,7 +10,10 @@ python-multipart
 requests
 websockets
 pydub
-# LLM 流水线（推断说话人、纠错）
+# LLM 流水线（推断说话人、纠错、T-SEDA 标记）
 python-dotenv
 langchain-openai
 langchain-core
+langchain-community
+langchain-text-splitters
+pandas

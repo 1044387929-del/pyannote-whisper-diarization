@@ -1,0 +1,92 @@
+"""测试 T-SEDA 标注接口（流式）：用 transcribe_output_refined_api.json 调用 POST /labels?stream=true"""
+import json
+import sys
+from pathlib import Path
+
+import requests
+
+# 项目根（scripts/test/test_label_api.py -> 向上 3 层）
+ROOT = Path(__file__).resolve().parent.parent.parent
+DATA_JSON = ROOT / "data" / "json" / "transcribe_output_refined_api.json"
+LABELS_URL = "http://127.0.0.1:8001/labels"
+
+# 只测前 N 条；设为 None 表示全部
+MAX_UTTERANCES = None
+
+
+def main():
+    if not DATA_JSON.exists():
+        print(f"数据文件不存在: {DATA_JSON}")
+        sys.exit(1)
+
+    with open(DATA_JSON, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    utterances_raw = data.get("utterances", [])
+    if not utterances_raw:
+        print("utterances 为空")
+        sys.exit(1)
+
+    utterances = [
+        {"text": u.get("text", ""), "speaker": u.get("speaker", "")}
+        for u in (utterances_raw[:MAX_UTTERANCES] if MAX_UTTERANCES else utterances_raw)
+    ]
+
+    print(f"请求条数: {len(utterances)}（流式）")
+    print(f"POST {LABELS_URL} stream=true ...\n")
+
+    try:
+        r = requests.post(
+            LABELS_URL,
+            json={"utterances": utterances, "context_window": 3, "stream": True},
+            timeout=120,
+            stream=True,
+        )
+        r.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"请求失败: {e}")
+        if hasattr(e, "response") and e.response is not None:
+            print(e.response.text[:500])
+        sys.exit(1)
+
+    result_list = []
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        payload = line[6:].strip()
+        if not payload:
+            continue
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("done"):
+            break
+        if "error" in obj:
+            print(f"服务端错误: {obj['error']}")
+            sys.exit(1)
+        idx = obj.get("index", len(result_list))
+        utt = obj.get("utterance", {})
+        result_list.append(utt)
+        text_preview = (utt.get("text") or "")[:50]
+        if len(utt.get("text") or "") > 50:
+            text_preview += "..."
+        reason_preview = (utt.get("reason") or "")[:60]
+        if len(utt.get("reason") or "") > 60:
+            reason_preview += "..."
+        print(f"[{idx+1}] {utt.get('speaker', '')}: {text_preview}")
+        print(f"    label={utt.get('label')}  reason={reason_preview}")
+        print()
+
+    print(f"返回条数: {len(result_list)}")
+
+    out = {"utterances": result_list}
+    out_path = ROOT / "data" / "json" / "transcribe_output_labeled.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    print(f"完整结果已写入: {out_path}")
+
+
+if __name__ == "__main__":
+    main()
