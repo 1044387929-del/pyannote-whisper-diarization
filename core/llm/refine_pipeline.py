@@ -5,7 +5,7 @@
 import asyncio
 import copy
 import re
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 # 句末标点（判断是否已是一句、拆分多句）
 SENTENCE_END = re.compile(r"[。！？.!?]\s*$")
@@ -386,13 +386,17 @@ class RefinePipeline:
         utterances: List[dict],
         allowed_speakers_from_input: Optional[List[dict]] = None,
         previous_context: Optional[List[dict]] = None,
+        progress_callback: Optional[Callable[[str, float, Optional[List[dict]]], None]] = None,
     ) -> List[dict]:
         """执行精修流水线，返回精修后的 utterance 列表。
         若提供 allowed_speakers_from_input，则仅保留该列表中的说话人，无 speaker_0/unknown。
         previous_context：流式场景下已精修的上文，用于说话人推断时的上文语境。
+        progress_callback：可选，(stage, progress, extra) 用于流式推送进度；stage=="done" 时 extra 为结果列表。
         """
         if not utterances:
             return []
+        if progress_callback:
+            progress_callback("start", 0.0, None)
         original = copy.deepcopy(utterances)
         out = copy.deepcopy(utterances)
         allowed_speakers = (
@@ -407,14 +411,22 @@ class RefinePipeline:
                 context_size=self.context_size, verbose=self.verbose,
                 previous_context=previous_context,
             )
+        if progress_callback:
+            progress_callback("infer_speakers", 0.2, None)
         if self.merge:
             out = merge_fragments(out, verbose=self.verbose)
+        if progress_callback:
+            progress_callback("merge", 0.4, None)
         if self.correct_text:
             out = await correct_utterance_texts(
                 out, self.llm, verbose=self.verbose,
                 max_concurrent=self.correct_max_concurrent,
             )
+        if progress_callback:
+            progress_callback("correct_text", 0.6, None)
         out = split_utterances_by_sentence(out, verbose=self.verbose)
+        if progress_callback:
+            progress_callback("split", 0.75, None)
         if self.filter_meaningless:
             out = filter_empty_and_meaningless(out, verbose=self.verbose)
         out = _force_no_unknown(out, verbose=self.verbose)
@@ -422,7 +434,41 @@ class RefinePipeline:
             out = _filter_to_allowed_speakers_only(
                 out, allowed_speakers_from_input, verbose=self.verbose
             )
+        if progress_callback:
+            progress_callback("done", 1.0, out)
         return out
+
+    async def run_chunked(
+        self,
+        utterances: List[dict],
+        chunk_size: int = 15,
+        allowed_speakers_from_input: Optional[List[dict]] = None,
+        progress_callback: Optional[Callable[[str, float, Optional[List[dict]]], None]] = None,
+    ) -> List[dict]:
+        """按块执行精修，每完成一块即通过 progress_callback("utterance", progress, (global_index, u)) 推送，
+        实现真正的 SSE：修完部分结果就返回给客户端。"""
+        if not utterances:
+            return []
+        all_out: List[dict] = []
+        n_input = len(utterances)
+        for start in range(0, n_input, chunk_size):
+            chunk = utterances[start : start + chunk_size]
+            prev = all_out[-self.context_size:] if all_out else None
+            chunk_result = await self.run(
+                copy.deepcopy(chunk),
+                allowed_speakers_from_input=allowed_speakers_from_input,
+                previous_context=prev,
+                progress_callback=None,
+            )
+            for i, u in enumerate(chunk_result):
+                global_idx = len(all_out) + i
+                progress = (start + len(chunk)) / n_input if n_input else 1.0
+                if progress_callback:
+                    progress_callback("utterance", progress, (global_idx, u))
+            all_out.extend(chunk_result)
+        if progress_callback:
+            progress_callback("done", 1.0, all_out)
+        return all_out
 
     async def run_incremental(
         self,
@@ -454,8 +500,11 @@ async def run_pipeline(
     verbose: bool = False,
     correct_max_concurrent: int = 10,
     allowed_speakers_from_input: Optional[List[dict]] = None,
+    progress_callback: Optional[Callable[[str, float, Optional[List[dict]]], None]] = None,
 ) -> List[dict]:
-    """兼容入口：构造 RefinePipeline 并执行 run。若提供 allowed_speakers_from_input 则只保留该列表中的说话人。"""
+    """兼容入口：构造 RefinePipeline 并执行 run。若提供 allowed_speakers_from_input 则只保留该列表中的说话人。
+    progress_callback 用于流式推送进度：(stage, progress, extra)，stage=="done" 时 extra 为结果。
+    """
     pipeline = RefinePipeline(
         llm=llm,
         infer_speakers=infer_speakers,
@@ -466,7 +515,44 @@ async def run_pipeline(
         verbose=verbose,
         correct_max_concurrent=correct_max_concurrent,
     )
-    return await pipeline.run(utterances, allowed_speakers_from_input=allowed_speakers_from_input)
+    return await pipeline.run(
+        utterances,
+        allowed_speakers_from_input=allowed_speakers_from_input,
+        progress_callback=progress_callback,
+    )
+
+
+async def run_pipeline_chunked(
+    utterances: List[dict],
+    chunk_size: int = 15,
+    llm=None,
+    infer_speakers: bool = True,
+    merge: bool = True,
+    correct_text: bool = True,
+    filter_meaningless: bool = True,
+    context_size: int = 3,
+    verbose: bool = False,
+    correct_max_concurrent: int = 10,
+    allowed_speakers_from_input: Optional[List[dict]] = None,
+    progress_callback: Optional[Callable[[str, float, Optional[List[dict]]], None]] = None,
+) -> List[dict]:
+    """按块精修并流式推送：每完成一块即回调 utterance，实现真正的 SSE。"""
+    pipeline = RefinePipeline(
+        llm=llm,
+        infer_speakers=infer_speakers,
+        merge=merge,
+        correct_text=correct_text,
+        filter_meaningless=filter_meaningless,
+        context_size=context_size,
+        verbose=verbose,
+        correct_max_concurrent=correct_max_concurrent,
+    )
+    return await pipeline.run_chunked(
+        utterances,
+        chunk_size=chunk_size,
+        allowed_speakers_from_input=allowed_speakers_from_input,
+        progress_callback=progress_callback,
+    )
 
 
 def _force_no_unknown(utterances: List[dict], verbose: bool = True) -> List[dict]:

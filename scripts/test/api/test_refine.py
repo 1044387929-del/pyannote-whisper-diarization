@@ -4,7 +4,8 @@ import json
 import sys
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent.parent.parent
+# 项目根（scripts/test/api/ -> 上溯 4 层）
+BASE = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(BASE))
 
 INPUT_JSON = BASE / "data" / "json" / "transcribe_output.json"

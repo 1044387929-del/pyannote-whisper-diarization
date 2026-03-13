@@ -4,15 +4,17 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+# 项目根（scripts/test/api/ -> 上溯 4 层）
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+TEST_DATA = Path(__file__).resolve().parent.parent / "data"
 sys.path.insert(0, str(ROOT))
 from utils.common import secs_to_hms
 import requests
 
 # 脚本内参数（按需修改）
 REFINE = True  # True：流中同时做精修
-SPEAKERS_JSON = ROOT / r"data/json/speakers_embedding.json"
-AUDIO_PATH = ROOT / r"data/audio/audio_all.wav"
+SPEAKERS_JSON = TEST_DATA / "json" / "speakers_embedding.json"
+AUDIO_PATH = TEST_DATA / "audio" / "audio_all.wav"
 URL = r"http://127.0.0.1:8001/transcriptions/stream"
 
 # 如果说话人 JSON 不存在，则退出

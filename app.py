@@ -20,7 +20,7 @@ app = FastAPI(
 
 # 音频转录：REST 风格 /embeddings、/transcriptions、/transcriptions/stream、/live、/ws/transcriptions/live
 app.include_router(audio.router)
-# 大模型精修：REST 风格 POST /refinements
+# 大模型：精修 POST /refinements（可选 stream 看阶段进度）、标注 POST /labels（可选 stream 按条推送）
 app.include_router(llm.router)
 # 健康检查
 app.include_router(health.router)

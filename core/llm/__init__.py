@@ -6,6 +6,7 @@ from .refine_pipeline import (
     merge_fragments,
     correct_utterance_texts,
     run_pipeline,
+    run_pipeline_chunked,
 )
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "merge_fragments",
     "correct_utterance_texts",
     "run_pipeline",
+    "run_pipeline_chunked",
 ]

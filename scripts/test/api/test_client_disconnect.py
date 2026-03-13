@@ -5,10 +5,10 @@
   uvicorn app:app --host 0.0.0.0 --port 8001
 
   cd pyannote_diarization
-  python scripts/test/test_client_disconnect.py [音频文件] [断开秒数]
+  python scripts/test/api/test_client_disconnect.py [音频文件] [断开秒数]
 
 示例:
-  python scripts/test/test_client_disconnect.py data/audio/audio_all.wav 5
+  python scripts/test/api/test_client_disconnect.py scripts/test/data/audio/audio_all.wav 5
 
 会发起 POST /transcriptions，在指定秒数后杀掉客户端进程以关闭连接（模拟用户取消）。
 观察 FastAPI 终端是否打印「取消转录」且转录未跑完。
@@ -19,8 +19,10 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-SPEAKERS_JSON = ROOT / "data" / "json" / "speakers_embedding.json"
+# 项目根（scripts/test/api/ -> 上溯 4 层）
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+TEST_DATA = Path(__file__).resolve().parent.parent / "data"
+SPEAKERS_JSON = TEST_DATA / "json" / "speakers_embedding.json"
 URL = "http://127.0.0.1:8001/transcriptions"
 
 
@@ -61,7 +63,7 @@ def run(audio_path: Path, disconnect_after_secs: float = 5.0) -> None:
     print("\n请查看 FastAPI 终端是否出现:「取消转录：收到客户端断开连接」且转录未完成即停止。")
 
 if __name__ == "__main__":
-    audio = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data" / "audio" / "audio_all.wav"
+    audio = Path(sys.argv[1]) if len(sys.argv) > 1 else TEST_DATA / "audio" / "audio_all.wav"
     secs = float(sys.argv[2]) if len(sys.argv) > 2 else 5.0
     print(f"音频: {audio} | {secs}s 后断开")
     run(audio, secs)

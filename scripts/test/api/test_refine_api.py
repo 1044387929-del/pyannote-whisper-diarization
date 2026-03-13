@@ -1,17 +1,19 @@
 """测试 POST /refinements 接口。需先启动服务: uvicorn app:app --host 0.0.0.0 --port 8001
-在项目根目录运行: python scripts/test/test_refine_api.py
+在项目根目录运行: python scripts/test/api/test_refine_api.py
 """
 import json
 import sys
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent.parent.parent
+# 项目根（scripts/test/api/ -> 上溯 4 层）
+BASE = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(BASE))
+TEST_DATA = Path(__file__).resolve().parent.parent / "data"
 
 import requests
 
-INPUT_JSON = BASE / "data" / "json" / "transcribe_output.json"
-OUTPUT_JSON = BASE / "data" / "json" / "transcribe_output_refined_api.json"
+INPUT_JSON = TEST_DATA / "json" / "transcribe_output.json"
+OUTPUT_JSON = TEST_DATA / "json" / "transcribe_output_refined_api.json"
 URL = "http://127.0.0.1:8001/refinements"
 
 

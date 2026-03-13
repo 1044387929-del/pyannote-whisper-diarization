@@ -5,7 +5,9 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+# 项目根（scripts/test/api/ -> 上溯 4 层）
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+TEST_DATA = Path(__file__).resolve().parent.parent / "data"
 sys.path.insert(0, str(ROOT))
 from utils.common import secs_to_hms
 
@@ -22,8 +24,8 @@ except ImportError:
 
 # 脚本内参数（按需修改）
 REFINE = True  # True：边录边修正（纠错/标点/说话人推断等）
-AUDIO_PATH = ROOT / r"data/audio/audio_all.wav"
-SPEAKERS_JSON = ROOT / r"data/json/speakers_embedding.json"
+AUDIO_PATH = TEST_DATA / "audio" / "audio_all.wav"
+SPEAKERS_JSON = TEST_DATA / "json" / "speakers_embedding.json"
 URL = r"ws://127.0.0.1:8001/ws/transcriptions/live"
 # 音频切分时间，单位：秒
 CHUNK_SECONDS = 10

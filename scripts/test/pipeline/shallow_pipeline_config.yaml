@@ -1,0 +1,24 @@
+# 浅度流水线测试配置（test_shallow_pipeline.py 读取）
+# 路径相对 scripts/test/data，或写绝对路径
+
+# 方式一：从音频+声纹跑完整流水线（填写 audio + speakers，from_json 留空或注释）
+# 方式二：从已有转录 JSON 开始，跳过转录（填写 from_json）
+audio: audio/audio_all.wav
+speakers: json/speakers_embedding.json
+from_json: null   # 有值时跳过转录；null 则从 audio+speakers 跑完整流水线
+
+# 精修 / 标注是否用 SSE 流式（便于看进度）
+stream_refine: true
+stream_labels: true
+
+# 只标注前 N 条，不填或 null 表示全部
+max_labels: null
+
+# Whisper 语言
+language: zh
+
+# 输出 JSON 路径（相对 scripts/test/data）
+out: json/shallow_pipeline_output.json
+
+# 服务地址（可选）
+# base_url: http://127.0.0.1:8001

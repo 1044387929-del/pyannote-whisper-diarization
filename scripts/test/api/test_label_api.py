@@ -5,12 +5,13 @@ from pathlib import Path
 
 import requests
 
-# 项目根（scripts/test/test_label_api.py -> 向上 3 层）
-ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_JSON = ROOT / "data" / "json" / "transcribe_output_refined_api.json"
+# 项目根（scripts/test/api/ -> 上溯 4 层）
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+TEST_DATA = Path(__file__).resolve().parent.parent / "data"
+DATA_JSON = TEST_DATA / "json" / "transcribe_output_refined_api.json"
 LABELS_URL = "http://127.0.0.1:8001/labels"
 # 仅保存标注结果，不含 start/end/student_id 等，客户端自行按 index 与本地数据合并
-OUT_LABELS_JSON = ROOT / "data" / "json" / "transcribe_output_labels_only.json"
+OUT_LABELS_JSON = TEST_DATA / "json" / "transcribe_output_labels_only.json"
 
 # 只测前 N 条；设为 None 表示全部
 MAX_UTTERANCES = None

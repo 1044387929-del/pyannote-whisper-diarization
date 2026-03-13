@@ -10,6 +10,8 @@ python-multipart
 requests
 websockets
 pydub
+# 测试脚本配置（浅度流水线等）
+pyyaml
 # LLM 流水线（推断说话人、纠错、T-SEDA 标记）
 python-dotenv
 langchain-openai
