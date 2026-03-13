@@ -18,8 +18,12 @@ max_labels: null
 # Whisper 语言
 language: zh
 
-# 输出 JSON 路径（相对 scripts/test/data）
-out: json/shallow_pipeline_output.json
+# 输出 JSON 路径（相对 scripts/test/data），每环节都会写入供查看
+out_transcribe: json/transcribe_output.json   # 转录结果
+out_refined: json/refined_output.json         # 精修结果（无 label）
+out: json/shallow_pipeline_output.json       # 标注后的最终结果
+out_metrics: json/metrics_output.json        # T-SEDA 指标
+out_eval: json/evaluation_output.json        # 评价与建议（小组整体 + 个人）
 
 # 服务地址（可选）
 # base_url: http://127.0.0.1:8001

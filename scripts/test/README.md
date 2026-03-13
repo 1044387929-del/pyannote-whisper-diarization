@@ -15,7 +15,8 @@
   - `test_live_transcribe.py` — WebSocket /ws/transcriptions/live  
   - `test_client_disconnect.py` — 客户端断开时取消转录  
   - `test_refine.py` / `test_refine_api.py` — POST /refinements  
-  - `test_label_api.py` — POST /labels（流式标注）
+  - `test_label_api.py` — POST /labels（流式标注）  
+  - `test_metrics_api.py` — POST /metrics（T-SEDA 指标）
 
 - **pipeline/** — 流水线测试  
   - `test_shallow_pipeline.py` — 浅度流水线：转录 → 精修 → 标注  
