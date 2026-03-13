@@ -98,34 +98,19 @@ async def _wait_client_disconnect(request: Request, cancelled: threading.Event) 
         cancelled.set()
 
 
-@router.post("/transcriptions")
-async def create_transcription(
-    request: Request,
-    student_id: List[str] = Form(..., description="学号，可多个，按顺序与 name、embedding 对应"),
-    name: List[str] = Form(..., description="姓名，可多个"),
-    embedding: List[str] = Form(..., description="256 维向量 JSON 字符串，如 [0.1,-0.2,...]"),
-    audio: UploadFile = File(..., description="待转写音频"),
-    language: str = Form("", description="Whisper 语言，如 zh、en，空则自动检测"),
-) -> dict:
-    """
-    提交若干个（学号、姓名、向量）三元组 + 待测音频，返回转录 JSON。
-    三元组用重复的 form 字段传递，三列按索引一一对应。
-
-    curl 示例（2 个说话人）:
-      curl -X POST http://127.0.0.1:8001/transcriptions \\
-        -F "student_id=2021001" -F "student_id=2021002" \\
-        -F "name=张三" -F "name=李四" \\
-        -F "embedding=[-0.13,0.12,...]" -F "embedding=[0.2,-0.1,...]" \\
-        -F "audio=@audio.wav" -F "language=zh"
-    """
+async def _parse_speakers_and_audio(
+    student_id: List[str],
+    name: List[str],
+    embedding: List[str],
+    audio: UploadFile,
+) -> tuple[list, bytes, str]:
+    """校验并解析 form，返回 (speakers_list, content, suffix)。"""
     suf = Path(audio.filename or "").suffix.lower()
     if suf and suf not in ALLOWED_EXT:
         raise HTTPException(**err_unsupported_format(suf, ", ".join(ALLOWED_EXT)))
-
     n = len(student_id)
     if n != len(name) or n != len(embedding) or n == 0:
         raise HTTPException(**err_speakers_mismatch(len(student_id), len(name), len(embedding)))
-
     speakers_list = []
     for i in range(n):
         try:
@@ -135,20 +120,57 @@ async def create_transcription(
         if not isinstance(emb, list):
             raise HTTPException(**err_embedding_not_array(i + 1))
         speakers_list.append({"student_id": student_id[i], "name": name[i], "embedding": emb})
-
     content = await audio.read()
     if not content:
         raise HTTPException(**ERR_AUDIO_EMPTY)
-
     suffix = get_audio_suffix(audio.filename)
+    return speakers_list, content, suffix
+
+
+@router.post("/transcriptions")
+async def create_transcription(
+    request: Request,
+    student_id: List[str] = Form(..., description="学号，可多个，按顺序与 name、embedding 对应"),
+    name: List[str] = Form(..., description="姓名，可多个"),
+    embedding: List[str] = Form(..., description="256 维向量 JSON 字符串，如 [0.1,-0.2,...]"),
+    audio: UploadFile = File(..., description="待转写音频"),
+    language: str = Form("", description="Whisper 语言，如 zh、en，空则自动检测"),
+    stream: bool = Form(False, description="为 true 时以 SSE 流式返回，每完成一句推送一条"),
+    refine: bool = Form(False, description="仅 stream=true 时有效：是否在流中同时做精修后推送"),
+):
+    """
+    提交若干个（学号、姓名、向量）三元组 + 待测音频。
+    stream=false：返回 JSON { "utterances": [ ... ] }。
+    stream=true：返回 text/event-stream，每完成一句推送一条 data 事件；可加 refine=true 在流中精修后推送。
+
+    curl 示例（2 个说话人，非流式）:
+      curl -X POST http://127.0.0.1:8001/transcriptions \\
+        -F "student_id=2021001" -F "student_id=2021002" \\
+        -F "name=张三" -F "name=李四" \\
+        -F "embedding=[-0.13,0.12,...]" -F "embedding=[0.2,-0.1,...]" \\
+        -F "audio=@audio.wav" -F "language=zh"
+    流式: 同上并加 -F "stream=true" ；带精修再加 -F "refine=true"
+    """
+    speakers_list, content, suffix = await _parse_speakers_and_audio(
+        student_id, name, embedding, audio
+    )
+    n = len(speakers_list)
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
         f.write(content)
         tmp_path = f.name
+    lang = language.strip() or None
+
+    if stream:
+        print(f"[服务端] 转录 stream=true | 说话人数: {n} | 音频: {audio.filename} | refine={refine}")
+        return StreamingResponse(
+            _stream_transcribe_events(tmp_path, speakers_list, lang, refine=refine),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
 
     cancelled = threading.Event()
     disconnect_task = asyncio.create_task(_wait_client_disconnect(request, cancelled))
     try:
-        lang = language.strip() or None
         print(f"[服务端] /transcriptions 转录开始 | 说话人数: {n} | 音频: {audio.filename}")
         loop = asyncio.get_event_loop()
         utterances = await loop.run_in_executor(
@@ -169,60 +191,3 @@ async def create_transcription(
         except asyncio.CancelledError:
             pass
         Path(tmp_path).unlink(missing_ok=True)
-
-
-@router.post("/transcriptions/stream")
-async def create_transcription_stream(
-    student_id: List[str] = Form(..., description="学号，可多个，按顺序与 name、embedding 对应"),
-    name: List[str] = Form(..., description="姓名，可多个"),
-    embedding: List[str] = Form(..., description="256 维向量 JSON 字符串，如 [0.1,-0.2,...]"),
-    audio: UploadFile = File(..., description="待转写音频"),
-    language: str = Form("", description="Whisper 语言，如 zh、en，空则自动检测"),
-    refine: bool = Form(False, description="是否在流中同时做精修（纠错/标点/说话人推断等）"),
-) -> StreamingResponse:
-    """
-    流式转录：参数与 POST /transcriptions 相同，每完成一句即通过 SSE 推送，无需等待全部完成。
-    refine=true 时，每句转写后先做增量精修再推送精修结果。
-
-    curl 示例（SSE 流式接收）:
-      curl -N -X POST http://127.0.0.1:8001/transcriptions/stream \\
-        -F "student_id=2021001" -F "student_id=2021002" \\
-        -F "name=张三" -F "name=李四" \\
-        -F "embedding=[-0.13,0.12,...]" -F "embedding=[0.2,-0.1,...]" \\
-        -F "audio=@audio.wav" -F "language=zh"
-    带精修: 同上并加 -F "refine=true"
-    """
-    suf = Path(audio.filename or "").suffix.lower()
-    if suf and suf not in ALLOWED_EXT:
-        raise HTTPException(**err_unsupported_format(suf, ", ".join(ALLOWED_EXT)))
-
-    n = len(student_id)
-    if n != len(name) or n != len(embedding) or n == 0:
-        raise HTTPException(**err_speakers_mismatch(len(student_id), len(name), len(embedding)))
-
-    speakers_list = []
-    for i in range(n):
-        try:
-            emb = json.loads(embedding[i])
-        except json.JSONDecodeError as e:
-            raise HTTPException(**err_embedding_format(i + 1, e))
-        if not isinstance(emb, list):
-            raise HTTPException(**err_embedding_not_array(i + 1))
-        speakers_list.append({"student_id": student_id[i], "name": name[i], "embedding": emb})
-
-    content = await audio.read()
-    if not content:
-        raise HTTPException(**ERR_AUDIO_EMPTY)
-
-    suffix = get_audio_suffix(audio.filename)
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
-        f.write(content)
-        tmp_path = f.name
-
-    print(f"[服务端] 流式转录请求开始 | 说话人数: {n} | 音频: {audio.filename} | refine={refine}")
-    lang = language.strip() or None
-    return StreamingResponse(
-        _stream_transcribe_events(tmp_path, speakers_list, lang, refine=refine),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )

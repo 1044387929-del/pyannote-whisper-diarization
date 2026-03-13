@@ -1,4 +1,4 @@
-"""测试 POST /transcriptions/stream 流式接口。先启动 uvicorn app:app，再运行本脚本。"""
+"""测试 POST /transcriptions 流式接口（stream=true）。先启动 uvicorn app:app，再运行本脚本。"""
 import json
 import sys
 from pathlib import Path
@@ -15,7 +15,7 @@ import requests
 REFINE = True  # True：流中同时做精修
 SPEAKERS_JSON = TEST_DATA / "json" / "speakers_embedding.json"
 AUDIO_PATH = TEST_DATA / "audio" / "audio_all.wav"
-URL = r"http://127.0.0.1:8001/transcriptions/stream"
+URL = r"http://127.0.0.1:8001/transcriptions"
 
 # 如果说话人 JSON 不存在，则退出
 if not SPEAKERS_JSON.exists():
@@ -27,7 +27,7 @@ if not AUDIO_PATH.exists():
     sys.exit(1)
 
 speakers = json.loads(SPEAKERS_JSON.read_text(encoding="utf-8"))
-data = [("language", "zh")]
+data = [("language", "zh"), ("stream", "true")]
 if REFINE:
     data.append(("refine", "true"))
 for s in speakers:
@@ -35,7 +35,7 @@ for s in speakers:
     data.append(("name", s["name"]))
     data.append(("embedding", json.dumps(s["embedding"], ensure_ascii=False)))
 
-print("[客户端] POST /transcriptions/stream 流式转录，开始请求..." + (" [refine=true]" if REFINE else ""))
+print("[客户端] POST /transcriptions stream=true 流式转录，开始请求..." + (" [refine=true]" if REFINE else ""))
 print("-" * 50)
 
 with open(AUDIO_PATH, "rb") as f:

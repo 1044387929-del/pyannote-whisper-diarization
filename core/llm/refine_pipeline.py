@@ -37,8 +37,10 @@ def _normalize_speaker(s: str) -> str:
     return s
 
 
-# 当整段没有任何已标注说话人时，用于兜底的默认说话人（保证每条发言都有归属）
+# 当整段没有任何已标注说话人时，用于兜底的默认说话人（内部用，输出前会转为 NOISE_LABEL）
 DEFAULT_SPEAKER = "speaker_0"
+# 无法识别说话人时统一标为「噪声发言」，不强行归为给定人物
+NOISE_LABEL = "噪声发言"
 
 
 def _get_allowed_speakers(utterances: List[dict]) -> List[dict]:
@@ -319,7 +321,7 @@ def _filter_to_allowed_speakers_only(
 ) -> List[dict]:
     """
     只保留「输入参数中的说话人」：发言的 speaker 或 student_id 不在允许列表中则删除；
-    仍为 speaker_0/unknown 的发言归为允许列表第一个，保证输出无 speaker_0/unknown。
+    仍为 speaker_0/unknown 的发言标为「噪声发言」，不强行赋说话人。
     allowed_speakers_from_input 每项需有 speaker、student_id（与 infer 一致）。
     """
     if not allowed_speakers_from_input:
@@ -329,22 +331,21 @@ def _filter_to_allowed_speakers_only(
     for a in allowed_speakers_from_input:
         s = _normalize_speaker(a.get("speaker"))
         sid = (a.get("student_id") or "").strip().lower()
-        if s and s not in ("unknown", DEFAULT_SPEAKER):
+        if s and s not in ("unknown", DEFAULT_SPEAKER, NOISE_LABEL):
             allowed_identities.add(s)
         if sid:
             allowed_identities.add(sid)
-    first = allowed_speakers_from_input[0]
     out = []
     dropped = 0
     for u in utterances:
         s = _normalize_speaker(u.get("speaker"))
         sid = (u.get("student_id") or "").strip().lower()
         in_allowed = (s in allowed_identities) or (sid in allowed_identities)
-        if not in_allowed and s not in ("unknown", DEFAULT_SPEAKER):
+        if not in_allowed and s not in ("unknown", DEFAULT_SPEAKER, NOISE_LABEL):
             dropped += 1
             continue
-        if s == "unknown" or s == DEFAULT_SPEAKER:
-            u = {**u, "speaker": first.get("speaker"), "student_id": first.get("student_id")}
+        if s in ("unknown", DEFAULT_SPEAKER):
+            u = {**u, "speaker": NOISE_LABEL, "student_id": NOISE_LABEL}
         out.append(u)
     if verbose and dropped:
         print(f"[仅保留输入说话人] 删除 {dropped} 条，剩余 {len(out)} 条")
@@ -556,13 +557,14 @@ async def run_pipeline_chunked(
 
 
 def _force_no_unknown(utterances: List[dict], verbose: bool = True) -> List[dict]:
-    """将仍为 unknown 的发言归为 DEFAULT_SPEAKER，保证每条都有归属。"""
+    """将 unknown / speaker_0 统一标为「噪声发言」，不强行赋说话人。"""
     replaced = 0
     for u in utterances:
-        if _normalize_speaker(u.get("speaker")) == "unknown":
-            u["speaker"] = DEFAULT_SPEAKER
-            u["student_id"] = DEFAULT_SPEAKER
+        s = _normalize_speaker(u.get("speaker"))
+        if s in ("unknown", DEFAULT_SPEAKER):
+            u["speaker"] = NOISE_LABEL
+            u["student_id"] = NOISE_LABEL
             replaced += 1
     if verbose and replaced:
-        print(f"[兜底] 将 {replaced} 条 unknown 归为 {DEFAULT_SPEAKER}")
+        print(f"[兜底] 将 {replaced} 条无法识别的发言标为「{NOISE_LABEL}」")
     return utterances

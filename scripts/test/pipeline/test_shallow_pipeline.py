@@ -51,18 +51,58 @@ def load_speakers(path: Path) -> list:
     return data
 
 
-def transcribe(audio_path: Path, speakers_path: Path, language: str, base_url: str) -> list:
-    url = f"{base_url.rstrip('/')}/transcriptions"
+def transcribe(
+    audio_path: Path, speakers_path: Path, language: str, base_url: str, stream: bool = False
+) -> list:
     speakers = load_speakers(speakers_path)
     data = [("language", language)]
     for s in speakers:
         data.append(("student_id", s.get("student_id", "")))
         data.append(("name", s.get("name", "")))
         data.append(("embedding", json.dumps(s["embedding"], ensure_ascii=False)))
+    if not stream:
+        url = f"{base_url.rstrip('/')}/transcriptions"
+        with open(audio_path, "rb") as f:
+            r = requests.post(url, data=data, files={"audio": (audio_path.name, f, "audio/wav")}, timeout=600)
+        r.raise_for_status()
+        return r.json().get("utterances", [])
+    data.append(("stream", "true"))
+    url = f"{base_url.rstrip('/')}/transcriptions"
     with open(audio_path, "rb") as f:
-        r = requests.post(url, data=data, files={"audio": (audio_path.name, f, "audio/wav")}, timeout=600)
+        r = requests.post(
+            url, data=data, files={"audio": (audio_path.name, f, "audio/wav")}, timeout=600, stream=True
+        )
     r.raise_for_status()
-    return r.json().get("utterances", [])
+    out_utterances = []
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        try:
+            obj = json.loads(line[6:].strip())
+        except json.JSONDecodeError:
+            continue
+        if obj.get("status") == "done":
+            continue
+        if obj.get("type") == "raw":
+            continue
+        if obj.get("type") == "refined":
+            out_utterances.append({k: v for k, v in obj.items() if k != "type"})
+            idx = len(out_utterances)
+            speaker = obj.get("speaker", "") or "?"
+            text = (obj.get("text", "") or "").strip()
+            snippet = (text[:50] + "…") if len(text) > 50 else text or "(空)"
+            print(f"      [转录] 第 {idx} 条: {speaker}: {snippet}")
+            continue
+        out_utterances.append(obj)
+        idx = obj.get("index", len(out_utterances))
+        total = obj.get("total") or 0
+        progress = obj.get("progress", 0)
+        speaker = obj.get("speaker", "") or "?"
+        text = (obj.get("text", "") or "").strip()
+        snippet = (text[:50] + "…") if len(text) > 50 else text or "(空)"
+        pct = f" ({progress:.0f}%)" if total else ""
+        print(f"      [转录] 第 {idx} 条{pct}: {speaker}: {snippet}")
+    return out_utterances
 
 
 def refine(utterances: list, stream: bool, allowed_speakers: list, base_url: str) -> list:
@@ -161,6 +201,7 @@ def main():
     audio = cfg.get("audio")
     speakers = cfg.get("speakers") or "json/speakers_embedding.json"
     from_json = cfg.get("from_json")
+    stream_transcribe = bool(cfg.get("stream_transcribe", False))
     stream_refine = bool(cfg.get("stream_refine", False))
     stream_labels = bool(cfg.get("stream_labels", False))
     max_labels = cfg.get("max_labels")
@@ -188,8 +229,8 @@ def main():
         if not speakers_path.exists():
             print(f"声纹不存在: {speakers_path}")
             sys.exit(1)
-        print(f"[1/3] 转录: {audio_path.name} + {speakers_path.name} ...")
-        utterances = transcribe(audio_path, speakers_path, language, base_url)
+        print(f"[1/3] 转录 (stream={stream_transcribe}): {audio_path.name} + {speakers_path.name} ...")
+        utterances = transcribe(audio_path, speakers_path, language, base_url, stream=stream_transcribe)
         print(f"      转录结果: {len(utterances)} 条")
     else:
         print("请在 shallow_pipeline_config.yaml 中设置 from_json 或同时设置 audio 与 speakers")
@@ -199,8 +240,15 @@ def main():
         print("无 utterance，退出")
         sys.exit(0)
 
+    allowed_speakers = None
+    if speakers_path and speakers_path.exists():
+        speakers_list = load_speakers(speakers_path)
+        allowed_speakers = [
+            {"speaker": s.get("name") or s.get("student_id"), "student_id": s.get("student_id")}
+            for s in speakers_list
+        ]
     print(f"[2/3] 精修 (stream={stream_refine}) ...")
-    refined = refine(utterances, stream_refine, None, base_url)
+    refined = refine(utterances, stream_refine, allowed_speakers, base_url)
     print(f"      精修结果: {len(refined)} 条")
     if not stream_refine:
         for i, u in enumerate(refined):

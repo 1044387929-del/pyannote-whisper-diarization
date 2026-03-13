@@ -7,7 +7,8 @@ audio: audio/audio_all.wav
 speakers: json/speakers_embedding.json
 from_json: null   # 有值时跳过转录；null 则从 audio+speakers 跑完整流水线
 
-# 精修 / 标注是否用 SSE 流式（便于看进度）
+# 转录 / 精修 / 标注是否用 SSE 流式（便于看进度）
+stream_transcribe: true
 stream_refine: true
 stream_labels: true
 

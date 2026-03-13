@@ -11,7 +11,7 @@
 
 - **api/** — 单接口测试  
   - `test_transcribe.py` — POST /transcriptions  
-  - `test_transcribe_stream.py` — POST /transcriptions/stream  
+  - `test_transcribe_stream.py` — POST /transcriptions（stream=true）  
   - `test_live_transcribe.py` — WebSocket /ws/transcriptions/live  
   - `test_client_disconnect.py` — 客户端断开时取消转录  
   - `test_refine.py` / `test_refine_api.py` — POST /refinements  
