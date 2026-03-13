@@ -13,7 +13,7 @@ router = APIRouter(tags=["label"])
 # 默认上下各 3 条作为上下文
 CONTEXT_WINDOW = 3
 # 并发数，避免打满 LLM/embedding
-MAX_CONCURRENT = 8
+MAX_CONCURRENT = 5
 
 
 def get_context_from_utterances(
@@ -82,6 +82,7 @@ async def _label_one(
     out = {"text": text or "", "speaker": speaker, "label": None, "reason": None}
     if not text:
         return out
+    # 获取上下文信息，使标注结果更可靠
     context_info = get_context_from_utterances(
         utterances, index, window_size=context_window
     )
@@ -134,41 +135,42 @@ async def label_utterances(body: dict):
             out = await _label_one(u, utterances, i, context_window)
             return (i, out)
 
-    tasks = [run_one(i, u) for i, u in enumerate(utterances)]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    ordered: list[tuple[int, dict]] = []
-    for r in results:
-        if isinstance(r, ValueError):
-            err_msg = str(r)
-            if stream:
-                async def event_gen_err(msg: str):
-                    yield f"data: {json.dumps({'error': msg}, ensure_ascii=False)}\n\n"
-                return StreamingResponse(
-                    event_gen_err(err_msg),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-                )
-            raise HTTPException(status_code=503, detail=err_msg)
-        if isinstance(r, Exception):
-            err_msg = str(r)
-            if stream:
-                async def event_gen_err(msg: str):
-                    yield f"data: {json.dumps({'error': msg}, ensure_ascii=False)}\n\n"
-                return StreamingResponse(
-                    event_gen_err(err_msg),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-                )
-            raise HTTPException(status_code=500, detail=err_msg)
-        ordered.append(r)
-    ordered.sort(key=lambda x: x[0])
-    result_list = [out for _, out in ordered]
-
     if stream:
+        # 流式：任务并发执行，完成一条按 index 顺序 yield 一条，终端可逐条打印
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def produce():
+            tasks = [run_one(i, u) for i, u in enumerate(utterances)]
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    i, out = await coro
+                    await queue.put((i, ("ok", out)))
+                except ValueError as e:
+                    await queue.put((-1, ("err", str(e))))
+                    return
+                except Exception as e:
+                    await queue.put((-1, ("err", str(e))))
+                    return
+            await queue.put((None, None))
+
         async def event_gen():
-            for i, out in ordered:
-                yield f"data: {json.dumps({'index': i, 'utterance': out}, ensure_ascii=False)}\n\n"
+            asyncio.create_task(produce())
+            buffer: dict[int, dict] = {}
+            next_index = 0
+            n = len(utterances)
+            while next_index < n:
+                item = await queue.get()
+                i, payload = item
+                if i is None:
+                    break
+                if payload[0] == "err":
+                    yield f"data: {json.dumps({'error': payload[1]}, ensure_ascii=False)}\n\n"
+                    return
+                buffer[i] = payload[1]
+                while next_index in buffer:
+                    out = buffer.pop(next_index)
+                    yield f"data: {json.dumps({'index': next_index, 'utterance': out}, ensure_ascii=False)}\n\n"
+                    next_index += 1
             yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
@@ -181,4 +183,17 @@ async def label_utterances(body: dict):
             },
         )
 
+    # 非流式：gather 后按 index 排序返回
+    tasks = [run_one(i, u) for i, u in enumerate(utterances)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    ordered: list[tuple[int, dict]] = []
+    for r in results:
+        if isinstance(r, ValueError):
+            raise HTTPException(status_code=503, detail=str(r))
+        if isinstance(r, Exception):
+            raise HTTPException(status_code=500, detail=str(r))
+        ordered.append(r)
+    ordered.sort(key=lambda x: x[0])
+    result_list = [out for _, out in ordered]
     return {"utterances": result_list}
