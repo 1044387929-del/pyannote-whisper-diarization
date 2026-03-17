@@ -1,0 +1,27 @@
+# 深层流水线测试配置（test_deep_pipeline.py 读取）
+# 方案 A：WebSocket 实时转录 → HTTP 精修 → HTTP 标注（不做指标与评价）
+# 路径相对 scripts/test/data，或写绝对路径
+
+audio: audio/audio_all.wav
+speakers: json/speakers_embedding.json
+
+# WebSocket 是否开启边录边修正（true 时服务端先发 transcript_raw 再发 transcript）
+refine_on_ws: false
+# 音频切块时长（秒），模拟实时发送
+chunk_seconds: 10
+
+# 转录后的精修 / 标注是否用 SSE 流式
+stream_refine: true
+stream_labels: true
+# 只标注前 N 条，null 表示全部
+max_labels: null
+
+language: zh
+
+# 输出 JSON 路径（相对 scripts/test/data）
+out_transcribe: json/deep_transcribe_output.json
+out_refined: json/deep_refined_output.json
+out: json/deep_pipeline_output.json
+
+# 服务地址（可选）
+# base_url: http://127.0.0.1:8001
