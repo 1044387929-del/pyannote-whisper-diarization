@@ -1,0 +1,37 @@
+[project]
+name = "pyannote-diarization"
+version = "0.1.0"
+description = "说话人分割、转写与 LLM 流水线 FastAPI 服务"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "pyannote.audio>=3.1.0",
+    "torch",
+    "torchaudio",
+    "faster-whisper",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "requests",
+    "websockets",
+    "pydub",
+    "pyyaml",
+    "python-dotenv",
+    "langchain-openai",
+    "langchain-core",
+    "langchain-community",
+    "langchain-text-splitters",
+    "pandas",
+    "numpy",
+    "faiss-cpu",
+    "dashscope",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["pytest"]
